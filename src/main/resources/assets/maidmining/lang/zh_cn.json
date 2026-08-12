@@ -1,0 +1,5 @@
+{
+    "task.maidmining.mining": "挖矿",
+    "task.maidmining.mining.desc": "自动搜索周围 3×3 区块内的矿石。副手放原矿可指定只挖对应类型。",
+    "task.maidmining.mining.condition.pickaxe": "镐子"
+}

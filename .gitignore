@@ -1,0 +1,37 @@
+# IDE
+bin
+out
+*.launch
+.settings
+.metadata
+.classpath
+.project
+*.ipr
+*.iws
+*.iml
+.idea
+.vscode
+
+# Gradle
+build
+.gradle
+!gradle/wrapper/gradle-wrapper.jar
+
+# Minecraft
+run
+run-data
+logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Mod outputs
+libs/
+mcmodsrepo/
+eclipse
+run
+
+# Files from Forge MDK
+forge*changelog.txt

@@ -1,0 +1,5 @@
+{
+    "task.maidmining.mining": "Mining",
+    "task.maidmining.mining.desc": "Mine ores within a 3×3 chunk radius. Put raw ore in offhand to target specific types.",
+    "task.maidmining.mining.condition.pickaxe": "pickaxe"
+}
