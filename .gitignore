@@ -35,3 +35,6 @@ run
 
 # Files from Forge MDK
 forge*changelog.txt
+
+# Private handoff doc (contains credentials - DO NOT COMMIT)
+HANDOFF.md

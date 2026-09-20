@@ -33,7 +33,7 @@
 ./gradlew jar
 ```
 
-Output: `build/libs/maidmining-1.0.0.jar`
+Output: `build/libs/maidmining-1.0.1.jar`
 
 ## License
 

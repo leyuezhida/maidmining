@@ -6,10 +6,6 @@ import com.google.common.collect.Lists;
 import com.leyue.maidmining.MaidMiningMod;
 import com.leyue.maidmining.mining.MiningTunnelBehavior;
 import com.mojang.datafixers.util.Pair;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.resources.language.I18n;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.entity.ai.behavior.BehaviorControl;
@@ -22,46 +18,28 @@ import java.util.function.Predicate;
 
 /**
  * 女仆“挖矿”任务定义。
- * 职责：提供任务标识、图标、显示名称，并把挖矿行为装配进女仆大脑。
+ * <p>
+ * 职责：提供任务标识、图标，并把挖矿行为装配进女仆大脑。
+ * <p>
+ * <b>刻意不覆写 {@code getName()} / {@code getDescription()}</b>：
+ * TLM 的默认实现会由 UID 自动生成 i18n key（{@code task.maidmining.mining} 与
+ * {@code task.maidmining.mining.desc}）并返回可翻译组件 / key 列表，由 GUI 端翻译，
+ * 中英文案只需维护语言文件这一份事实源。
+ * <p>
+ * 旧版（v1.0.0）覆写了这两个方法，并在里面直接调用 {@code net.minecraft.client.*}
+ * （{@code Minecraft} / {@code I18n}）：这在<b>专用服务器</b>上是客户端类，
+ * 一旦服务端走到这条路径就会 {@code NoClassDefFoundError}，
+ * 而旧代码只 {@code catch (Exception)}，捕不到 {@code Error}。
+ * 详见 OPTIMIZATION.md 的 MM-901 / MM-902。
  */
 public class MiningTask implements IMaidTask {
-    public static final ResourceLocation UID = new ResourceLocation(MaidMiningMod.MOD_ID, "mining");
-
-    private static final String NAME_EN = "Mining";
-    private static final String NAME_ZH = "\u6316\u77ff";
-    private static final String DESC_EN = "Mine ores within a 3\u00d73 chunk radius. A pickaxe is required; put raw ore in offhand to target specific types.";
-    private static final String DESC_ZH = "\u81ea\u52a8\u641c\u7d22\u5468\u56f4 3\u00d73 \u533a\u5757\u5185\u7684\u77ff\u77f3\uff0c\u9700\u8981\u9550\u5b50\uff0c\u526f\u624b\u653e\u539f\u77ff\u53ef\u6307\u5b9a\u53ea\u6316\u5bf9\u5e94\u7c7b\u578b\u3002";
-
-    private static boolean isZh() {
-        try {
-            String lang = Minecraft.getInstance().getLanguageManager().getSelected();
-            return "zh_cn".equals(lang) || "zh_tw".equals(lang);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
+    public static final ResourceLocation UID = ResourceLocation.tryBuild(MaidMiningMod.MOD_ID, "mining");
 
     @Override
     public ResourceLocation getUid() { return UID; }
 
     @Override
     public ItemStack getIcon() { return new ItemStack(Items.IRON_PICKAXE); }
-
-    @Override
-    public MutableComponent getName() {
-        String key = "task.maidmining.mining";
-        String fromLang = I18n.get(key);
-        if (!key.equals(fromLang)) return Component.literal(fromLang);
-        return isZh() ? Component.literal(NAME_ZH) : Component.literal(NAME_EN);
-    }
-
-    @Override
-    public List<String> getDescription(EntityMaid maid) {
-        String key = "task.maidmining.mining.desc";
-        String fromLang = I18n.get(key);
-        if (!key.equals(fromLang)) return List.of(fromLang);
-        return List.of(isZh() ? DESC_ZH : DESC_EN);
-    }
 
     @Override
     public List<Pair<String, Predicate<EntityMaid>>> getConditionDescription(EntityMaid maid) {

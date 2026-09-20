@@ -143,4 +143,22 @@ publishing {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    // 打开弃用/未检查提示：避免像 ResourceLocation(String,String) 这类
+    // 已被标记为删除的 API 悄悄堆积（见 OPTIMIZATION.md MM-1005/MM-1007）
+    options.compilerArgs += ['-Xlint:deprecation', '-Xlint:unchecked']
+}
+
+// GameTest 的结构模板必须位于「世界目录」下的 gameteststructures/（Forge 约定，不是数据包）。
+// 仓库内的 gameteststructures/ 是唯一事实源，运行前自动同步，保证测试可复现。
+afterEvaluate {
+    tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+        doFirst {
+            ['run/gameteststructures', 'run/world/gameteststructures'].each { dest ->
+                copy {
+                    from rootProject.file('gameteststructures')
+                    into rootProject.file(dest)
+                }
+            }
+        }
+    }
 }
