@@ -10,10 +10,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.common.util.FakePlayer;
 import net.minecraftforge.common.util.FakePlayerFactory;
+import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.List;
 
@@ -61,15 +63,21 @@ public final class DigExecutor {
     public static BreakResult dig(ServerLevel level, EntityMaid maid, BlockPos pos) {
         ItemStack tool = maid.getMainHandItem();
 
+        // 0) 诊断：破坏失败时把完整上下文打出来，否则实机只能靠猜
+        //    （实机曾出现"挖不到矿"的日志，分不清是保护、硬度还是掉落）
+        boolean verbose = MiningConfig.logDebugEnabled();
+
         // 1) 世界侧判定：空气 / 基岩 / 流体 / 超硬
         BreakResult pre = MiningValidator.classifyDig(level, pos, tool);
         if (pre != BreakResult.SUCCESS) {
+            logDigFailure(verbose, maid, pos, level, tool, "classify=" + pre);
             return pre;
         }
 
         // 2) 保护判定：onEntityDestroyBlock + mobGriefing（MM-301）
         //    两种模式都先问 maid，否则切到 FakePlayer 就等于绕过所有 TLM 侧保护规则。
         if (!maid.canDestroyBlock(pos)) {
+            logDigFailure(verbose, maid, pos, level, tool, "canDestroyBlock=false (protection or mobGriefing)");
             return BreakResult.PROTECTED;
         }
 
@@ -77,6 +85,61 @@ public final class DigExecutor {
         return MiningConfig.useFakePlayer()
                 ? digAsPlayer(level, maid, pos, tool)
                 : digAsMaid(level, maid, pos, tool);
+    }
+
+    /**
+     * 破坏失败的诊断日志。
+     * <p>
+     * <b>为什么要打工具栈的完整信息</b>：附魔类问题（时运/精准采集）无法从
+     * "挖到 1 个铁粒"这种外部现象判断是附魔没读到、还是掉落表被改、还是根本没挖到。
+     * 实机踩过的坑：日志里只有 "Mined"，看不出用的哪把镐、带没带附魔。
+     */
+    private static void logDigFailure(boolean verbose, EntityMaid maid, BlockPos pos,
+                                      ServerLevel level, ItemStack tool, String reason) {
+        if (!verbose) {
+            return;
+        }
+        MaidMiningMod.LOGGER.info(
+                "[MaidMining][DIAG-dig] {} ({},{},{}) reason={} block={} tool={} toolNbt={} silk={} fortune={}",
+                "dig-failed",
+                pos.getX(), pos.getY(), pos.getZ(),
+                reason,
+                ForgeRegistries.BLOCKS.getKey(level.getBlockState(pos).getBlock()),
+                ForgeRegistries.ITEMS.getKey(tool.getItem()),
+                tool.getTag(),
+                tool.getEnchantmentLevel(Enchantments.SILK_TOUCH),
+                tool.getEnchantmentLevel(Enchantments.BLOCK_FORTUNE));
+    }
+
+    /**
+     * 破坏成功时的诊断：把实际产出的物品打出来。
+     * <p>
+     * 这是验证"精准采集 / 时运是否生效"的<b>唯一可靠办法</b>——
+     * 玩家从背包里翻物品时可能把不同来源的产物混在一起，
+     * 而这里能确切地说明"这一次破坏、这一把镐、产出了什么"。
+     */
+    private static void logDigSuccess(EntityMaid maid, BlockPos pos, ItemStack tool,
+                                      List<ItemStack> drops, boolean silkPresent) {
+        if (!MiningConfig.logDebugEnabled()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ItemStack drop : drops) {
+            if (drop.isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(ForgeRegistries.ITEMS.getKey(drop.getItem()))
+                    .append(" x").append(drop.getCount());
+        }
+        MaidMiningMod.LOGGER.info(
+                "[MaidMining][DIAG-drops] pos=({},{},{}) tool={} silk={} drops=[{}]",
+                pos.getX(), pos.getY(), pos.getZ(),
+                ForgeRegistries.ITEMS.getKey(tool.getItem()),
+                silkPresent,
+                sb);
     }
 
     /**
@@ -96,9 +159,13 @@ public final class DigExecutor {
 
         // 无掉落破坏：避免与下面的手动交付重复给物品
         if (!maid.destroyBlock(level, pos, false, maid)) {
+            logDigFailure(MiningConfig.logDebugEnabled(), maid, pos, level, tool,
+                    "destroyBlock returned false (TLM path refused)");
             return BreakResult.TEMPORARY;
         }
 
+        logDigSuccess(maid, pos, tool, drops,
+                tool.getEnchantmentLevel(Enchantments.SILK_TOUCH) >= 1);
         deliver(level, maid, pos, drops, state, tool);
         afterDig(maid, tool);
         return BreakResult.SUCCESS;
