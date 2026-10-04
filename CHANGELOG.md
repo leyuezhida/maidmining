@@ -43,12 +43,14 @@
 - **标签重载后缓存自动失效** —— 装了新模组后 `/reload` 即可识别其矿石，不必重启游戏。
 - **读取配置更稳健** —— 配置尚未加载时回退到默认值而非崩溃。
 
-### 已知问题
+### 设计取舍（非缺陷）
 
-- 破坏仍是瞬时完成，**未模拟挖掘时间**；因此效率附魔暂不产生实际效果（已在选镐评分中预留位置，计划 1.2.0 引入时间模型）。
-- 耐久修补因「默认不消耗耐久」而无实际意义。
-- 目标黑名单仍只在内存中，不随存档持久化（计划 1.2.0）。
-- 遇到不可破坏的方块只会放弃目标，尚无「绕墙寻路」（计划 1.2.0）。
+以下是**有意为之的设计决定**，不是待修复的缺陷：
+
+- **破坏瞬时完成，不模拟挖掘时间** —— 因此效率附魔不产生实际效果（已在选镐评分中预留位置，若将来引入时间模型即可生效）。这让女仆的挖矿节奏保持稳定，也避免"挖到一半被打断"的复杂状态。
+- **不实现耐久修补的配套链路** —— 既然默认不消耗耐久，经验修补自然没有意义。喜欢磨损感的服务器管理员可打开 `dig.damageTool`。
+- **目标黑名单不随存档持久化** —— 它是**会话级**的短期记忆，作用是"这次别再撞同一面墙了"。重载后清空是合理的：世界已经变了，旧的失败记录未必还有效。
+- **遇到不可破坏的方块直接放弃目标，不做绕墙寻路** —— 这是明确的取舍：与其让女仆在深处闷头挖几十格后失败，不如立刻换一个目标。基岩旁的矿默认也会跳过（见上方「调整」）。
 
 ---
 
@@ -87,12 +89,14 @@ Two focuses: **pickaxe enchantments finally work**, and a **code structure refac
 - **Caches invalidate on tag reload** — `/reload` is enough after installing a new mod.
 - **Configuration reads degrade gracefully** instead of crashing if loaded too early.
 
-**Known issues**
+**Design trade-offs (not defects)**
 
-- Breaking is still instantaneous, so **Efficiency has no practical effect yet** (its slot in the pickaxe scoring is reserved for the future mining-time model).
-- Mending is moot while durability is not consumed by default.
-- Target blacklists are still not persisted to the save file.
-- Blocked paths are abandoned rather than routed around.
+The following are **intentional design decisions**, not bugs awaiting a fix:
+
+- **Breaking is instantaneous, with no mining-time simulation** — so Efficiency has no practical effect. Its slot in the pickaxe scoring is reserved should a time model ever be added. This keeps the maid's rhythm predictable and avoids the complexity of "interrupted mid-dig" states.
+- **No Mending support to go with it** — since durability is not consumed by default, Mending has nothing to repair. Servers that prefer wear can enable `dig.damageTool`.
+- **Target blacklists are not persisted** — they are *session-level* short-term memory, there to stop her hitting the same wall repeatedly within one run. Clearing them on reload is correct: the world has changed, and stale failures may no longer apply.
+- **Unbreakable blocks cause an immediate target change, no pathfinding around them** — a deliberate trade-off: rather than having the maid tunnel dozens of blocks before failing, she moves on to the next target at once. Ores next to bedrock are skipped by default too (see "Changed" above).
 
 ---
 

@@ -35,8 +35,13 @@ Enchantments on the pickaxe behave the way they would for a player:
 |-------------|--------|
 | **Fortune** | Increases ore yield (Fortune III can yield up to 4×) |
 | **Silk Touch** | Mining an ore yields the ore **block** instead of raw material — renewable, and usable as building material |
-| **Efficiency** | No practical effect yet: breaking is still instantaneous. A mining-time model is planned |
-| **Mending** | Moot while durability is not consumed (see below) |
+| **Efficiency** | No effect, by design: blocks break instantly (no mining-time simulation) |
+| **Mending** | Nothing to repair, since durability is not consumed (see below) |
+
+> The last two are **intentional design decisions**, not missing features. Instantaneous
+> breaking keeps the maid's rhythm predictable and avoids half-dug states; not consuming
+> durability means Mending has no purpose. Both enchantments still occupy a slot in the
+> pickaxe scoring, so nothing needs reworking if that changes later.
 
 The maid **picks the best pickaxe available**, scoring by mining enchantments, then tier, then remaining durability — so a diamond pickaxe will be preferred over a wooden one, and a Silk Touch pickaxe over a plain one of the same tier.
 

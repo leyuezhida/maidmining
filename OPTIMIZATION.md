@@ -268,7 +268,7 @@ MiningTunnelBehavior.tick()  ← 每 tick 由女仆大脑调用，永不退出�
 | 编号 | P | W | 现状证据 | 优化目标 | 验收标准 |
 |------|---|---|---------|---------|---------|
 | **MM-201** | P1 | L | `MiningTunnelFinder.java:62-77`：按"水平距离最近的列"排序，列内取**最上面**的第一个命中 → 既不是三维最近，也完全不考虑硬度/危险 | 目标评分函数：`score = 价值权重 − (三维距离·w1 + 预计挖掘量·w2 + 危险·w3 + 历史失败惩罚·w4)`，取最优解 | 单测：给定构造场景，选出的目标与期望一致；实测平均到达方块数下降 ≥ 20% |
-| **MM-202** | P1 | L | 完全无可达性判定：会为了一个被封死的矿挖 48 格才发现到不了 | 有界 Dijkstra/A*（预算：节点数/扩展距离上限）先给出可行性；不可达直接进入黑名单 | 不可达目标在 ≤ 200 次节点扩展内被判定；不再出现"长途挖穿后放弃"的日志 |
+| **MM-202** ❌ | P1 | L | **【有意不实施，见 §4.5】** 完全无可达性判定：会为了一个被封死的矿挖 48 格才发现到不了 | 有界 Dijkstra/A*（预算：节点数/扩展距离上限）先给出可行性；不可达直接进入黑名单 | 不可达目标在 ≤ 200 次节点扩展内被判定；不再出现"长途挖穿后放弃"的日志 |
 | **MM-203** | P1 | M | `MiningTunnelBehavior.java:302` 挖完立刻 `toSearch()` → 矿脉每个矿都触发一次全量重扫 | 挖到矿后先在 26 邻域内找同类矿（矿脉延续），脉内挖完再重新搜索 | 一个 4 连钻石矿的扫描次数从 4 次降为 1 次；实战效率提升可测 |
 | **MM-204** | P2 | M | 无任何单目标预算；实测最坏间隔 41 s【测】 | 单目标预算：最大耗时 / 最大破坏方块数 / 最大耗材，超限放弃并记账（原因可查） | 无任何单目标耗时 > 20 s；放弃原因写入统计（MM-805） |
 | **MM-205** | P2 | M | 无协调：两个女仆会挖同一条隧道，甚至互相埋住 | 目标软预约（claim）+ 超时释放；同矿只由一名女仆认领 | 10 女仆场景下重复隧道率 ≤ 5% |
@@ -281,7 +281,7 @@ MiningTunnelBehavior.tick()  ← 每 tick 由女仆大脑调用，永不退出�
 |------|---|---|---------|---------|---------|
 | **MM-301** | P1 | M | `:317` `maid.destroyBlock(pos)` 语义已核实（附录 D.2/D.3）：内部经 `canDestroyBlock` → `Block.canEntityDestroy`，而 Forge 的该默认实现转入 **`ForgeHooks.canEntityDestroy` = `getMobGriefingEvent(游戏规则 mobGriefing) && state.canEntityDestroy && onEntityDestroyBlock(LivingDestroyBlockEvent)`** ⇒ 保护 mod 与 `mobGriefing` **都能否决**。**但**：① 不触发 `BlockEvent.BreakEvent`（该事件只在玩家路径，`ForgeHooks.onBlockBreakEvent` 仅被 `ServerPlayerGameMode` 调用），而绝大多数领地/保护 mod 挂的是玩家事件；② 没有"不挖容器/玩家建筑"的概念；③ **`mobGriefing=false` 时全部破坏都会失败**，当前代码把它当"挖不动"累加 `stuckCount` → 把所有矿拉黑 → 女仆原地发呆且**零提示**（退化路径） | 保留 `destroyBlock` 通道并补齐：可配置"不破坏容器/玩家放置的方块/贵重方块"；被否决时换目标而非死循环；**检测到"整体不可破坏"（如 mobGriefing=false）时给出明确 i18n 提示并暂停任务**。若需要覆盖绝大多数保护 mod，可选用 FakePlayer 走玩家破坏路径（见 MM-303 备注，注意副作用） | 保护 mod 否决后女仆换目标；`mobGriefing=false` 时有明确提示而非静默发呆；默认不挖容器与玩家建筑 |
 | **MM-302** | **P0** | M | `:440` 直接 `level.setBlock(pos, state, 3)`：**任何事件都不会触发**，也没有 `BlockItem#place` 的方块自身逻辑（朝向/含水/可替换判定） | 放置走 `BlockItem#place` / `BlockPlaceContext` 语义，使其进入 Forge 的可拦截路径 | 放置可被 mod 拦截；放置失败时不消耗物品 |
-| **MM-303** ✅ | P1 | L | `:289,317` 瞬时破坏（`destroyBlock`）——`getDestroySpeed` 只用于"是否 <50"这一条硬编码规则。**核实补充（附录 D.3.4）**：`Level#destroyBlock`（以及 TLM 手抄版）求掉落时传的是 **`ItemStack.EMPTY` 作为工具**（`Block.getDrops(..., toolStack)`），⇒ **时运/精准采集永远不生效**；同时"需要正确工具"的门槛（`BlockState.canHarvestBlock`）只在玩家路径检查，TLM 路径完全跳过 ⇒ 本 mod 自己的 `isCorrectToolForDrops` 校验是**唯一**的等级门槛 | 引入挖掘时间模型：按方块硬度与工具挖掘速度计算所需 tick，进度可视化（裂纹/音效/挥臂）；**并用真实工具栈自行计算掉落**（`Block.getDrops(state, level, pos, be, maid, realTool)` → `destroyBlock(pos, false)` 无掉落破坏 → 自行入包），使时运/精准采集/效率生效 | 石头用铁镐的破坏耗时与玩家体感一致（±30%）；带时运的镐产出正确数量；精准采集能拿到原矿方块 |
+| **MM-303** ✅（仅掉落部分） | P1 | L | `:289,317` 瞬时破坏（`destroyBlock`）——`getDestroySpeed` 只用于"是否 <50"这一条硬编码规则。**核实补充（附录 D.3.4）**：`Level#destroyBlock`（以及 TLM 手抄版）求掉落时传的是 **`ItemStack.EMPTY` 作为工具**（`Block.getDrops(..., toolStack)`），⇒ **时运/精准采集永远不生效**；同时"需要正确工具"的门槛（`BlockState.canHarvestBlock`）只在玩家路径检查，TLM 路径完全跳过 ⇒ 本 mod 自己的 `isCorrectToolForDrops` 校验是**唯一**的等级门槛 | 引入挖掘时间模型：按方块硬度与工具挖掘速度计算所需 tick，进度可视化（裂纹/音效/挥臂）；**并用真实工具栈自行计算掉落**（`Block.getDrops(state, level, pos, be, maid, realTool)` → `destroyBlock(pos, false)` 无掉落破坏 → 自行入包），使时运/精准采集/效率生效 | 石头用铁镐的破坏耗时与玩家体感一致（±30%）；带时运的镐产出正确数量；精准采集能拿到原矿方块 | **【时间模型部分有意不实施，见 §4.5；掉落部分已达成 ✅】** |
 | **MM-303b** ✅ | P2 | M | **备选方案（一次性解决 MM-301/303/308）**：用 `FakePlayerFactory.getMinecraft(serverLevel)` 走**玩家破坏路径**——`ForgeHooks.onBlockBreakEvent`（几乎全部保护 mod 都能拦截）→ `ItemStack.mineBlock`（自动扣耐久）→ `Block.playerDestroy`（自动用真实工具算掉落）。代价：假玩家会带来统计/进度/`mayInteract` 出生点保护等副作用，且 `FakePlayer` 语义需谨慎 | 作为可配置的"兼容模式"实现，默认关闭；与 MM-301 的方案对比后二选一 | 开启后领地 mod 全部生效；工具耐久、时运、掉落与玩家破坏一致；无统计刷屏 |
 | **MM-304** 🟡 | P1 | M | `:234-259` 额外清空 `feet+(dx,2,dz)`；`tryClimb:365-372` 还要求 `stepPos+1/+2` 全通 ⇒ 挖出 **3 格高**隧道。**根因见 §1.5-B（已修正版）：这是为掩盖"上行会卡住"而做的补偿**；第二轮实机进一步确认——**2 格高巷道里跳跃被天花板截断在 0.5 格，1 格台阶物理上迈不上去** | 净高按实体碰撞箱计算（通常 2）：水平/向下 **1×2**；**仅在上台阶那一格多挖 1 格**形成局部凹坑（`JUMP_HEADROOM`）；通行判定用 `level.noCollision` 而非"几格是空气" | 水平段截面 1×2；上台阶处允许 1×3 局部凹坑；每格前进的破坏方块数下降 ≥ 30%；实机：上行不再依赖传送兜底 |
 | **MM-305** ✅ | **P1** | M | `:356,384` 用 `maid.setPos()` 传送；**上行主路径是 `:389` 的 `setWalkAndLookTargetMemories`（依赖原版寻路在 1 格宽竖井里跳一步），失败时完全没有兜底 ⇒ 这就是 §1.5-B 的卡住来源**。传送本身也不做碰撞解算、不清 `fallDistance`（附录 D.3.8） | 抽出 `VerticalMover` 原语，语义严格按"玩家怎么上去"：① 目标位置的包围盒必须通过 `level.noCollision(maid, bb)` 校验（失败则先挖开缺的那格）；② 先真实跳跃（`maid.getJumpControl().jump()` + 走位目标）；③ 连续 N tick 无位移才允许 `setPos` 兜底，兜底前再校验一次碰撞、兜底后 `resetFallDistance()`；④ 不允许在未通过校验时传送 | 正常上行不调用 `setPos`；1 格宽竖井上行永不卡死；卡进方块的次数 = 0；不再需要靠加高隧道来兜底 |
@@ -315,7 +315,7 @@ MiningTunnelBehavior.tick()  ← 每 tick 由女仆大脑调用，永不退出�
 | **MM-505** ✅ | P1 | M | `:473-485` 手写换镐：遍历全部 36 格（含展示位 5）、自己实现 swap。TLM 已有**语义完全正确**的工具方法（附录 D.2）：`TaskEquipUtil.tryEquipFromBackpack(maid, pred)`（手部已匹配则直接返回 true；从 `getAvailableBackpackInv()` 取整叠并与主手**交换**，无复制）与 `TaskEquipUtil.putMainHandBack(maid)`；但都不看等级/附魔/耐久 | `ToolManager`：按（等级 > 附魔 > 剩余耐久）选最优镐，用 `putMainHandBack` + 谓词精确匹配（`findStackSlot` 只返回首个匹配，谓词需含耐久判定）；剩余耐久低于阈值提前更换；无镐时明确报告 | 同时有木镐与钻石镐时用钻石镐；镐将坏时自动换新；换镐路径零复制（物品守恒测试覆盖） |
 | **MM-506** | P2 | S | 副手过滤物品与食物未受保护（垫脚选择只看"是否固体 BlockItem"）；TLM 的进食走 `MaidWorkMealTask`，会遍历主手/副手（`HandUtils.NATIVE_HANDS`）找 `IMaidMeal` 可吃的物品（附录 D.2）——挖矿行为若长期占用主手/副手，会影响进食判定 | 副手过滤物、食物、容器类永不作为建材/不被消耗；确认挖矿时主手必须持镐、副手保留过滤物不会阻断进食 | 单测覆盖；女仆在挖矿期间仍能正常进食 |
 | **MM-507** | P2 | S | `:393-395` 会拾取**玩家丢弃**的方块类物品，且不看 `maid.isPickup()`（TLM 的拾物模式，`isPickup()`/`setPickup(b)`，附录 D.2） | 只拾取自己造成的掉落（记录挖点）或按配置允许范围；始终尊重 `isPickup()` | 玩家丢出的方块不被捡走（默认）；关闭拾物模式后不拾取 |
-| **MM-508** | P3 | S | 矿石经验球被完全忽略 | TLM 已有经验拾取链路（`MaidPickupEvent.ExperienceResult`），本 mod 不应重复实现、也不应阻断它 | 复用 TLM 后经验正常入账；不再单列自实现 |
+| **MM-508** ❌ | P3 | S | **【有意不实施，见 §4.5】** 矿石经验球被完全忽略 | TLM 已有经验拾取链路（`MaidPickupEvent.ExperienceResult`），本 mod 不应重复实现、也不应阻断它 | 复用 TLM 后经验正常入账；不再单列自实现 |
 | **MM-509** ✅ | **P0** | S | **新增（核实后确立）**：`getMaidInv()` 返回的是 **36 格背包 `MaidBackpackHandler`**，其中 `BACKPACK_ITEM_SLOT == 5` 是女仆的**背包展示位**（`onContentsChanged` 会在该槽变动时改写女仆展示的物品）。当前代码在 `pickupDrops`/`placeStepBlock`/`equipPickaxe` 中按 `0..getSlots()` 无差别读写，**可能消耗或覆盖展示位物品**，也可能写入玩家存放的任意物品（附录 D.2） | 所有背包写操作集中到一个封装（`inv/*`）：只用 `getAvailableBackpackInv()`/`getAvailableInv(false)`，显式排除 `BACKPACK_ITEM_SLOT`，插入走 `ItemHandlerHelper.insertItemStacked`（尊重 `canInsertItem`） | 单测：槽位 5 的物品在任何路径下都不被读取为耗材、不被覆盖；展示物品保持不变 |
 
 ### M6 会话层：状态机与持久化
@@ -323,7 +323,7 @@ MiningTunnelBehavior.tick()  ← 每 tick 由女仆大脑调用，永不退出�
 | 编号 | P | W | 现状证据 | 优化目标 | 验收标准 |
 |------|---|---|---------|---------|---------|
 | **MM-601** ✅ | P1 | L | `MiningTunnelBehavior.java` 486 行单体类，六个职责混在一起 | 拆分为 会话状态机 + 感知/决策/执行/物品/安全 组件（见 §4），单类 ≤ 250 行，纯逻辑可单测 | 拆分后核心状态迁移可被单元测试直接驱动（无需启动游戏） |
-| **MM-602** | P1 | M | `:46-54` 全部状态在内存；`start()` 清空（`:66-70`）→ 切任务/重载即失忆 | 关键状态持久化：当前目标、黑名单、隧道进度、会话统计；**优先使用 TLM 提供的任务数据存储**（jar 内含 `api/entity/data/TaskDataKey`、`entity/data/TaskDataRegister`、`MaidTaskDataMaps`），避免自造 NBT 格式 | 存档保存/重载后，女仆继续原目标；黑名单保留 |
+| **MM-602** ❌ | P1 | M | **【有意不实施，见 §4.5】** `:46-54` 全部状态在内存；`start()` 清空（`:66-70`）→ 切任务/重载即失忆 | 关键状态持久化：当前目标、黑名单、隧道进度、会话统计；**优先使用 TLM 提供的任务数据存储**（jar 内含 `api/entity/data/TaskDataKey`、`entity/data/TaskDataRegister`、`MaidTaskDataMaps`），避免自造 NBT 格式 | 存档保存/重载后，女仆继续原目标；黑名单保留 |
 | **MM-603** | P1 | M | `:56-58,61-63` duration=`Integer.MAX_VALUE`、`canStillUse` 恒 true。**核实结论（附录 D.2）：核心行为并没有被压制**——`createBrainTasks` 的返回值只进入 `Activity.WORK`，TLM 还会追加 `MaidBegTask(6)`/`MaidWorkMealTask(7)`/`MaidStealEdible*(8)`/look-and-random-walk(20)/`MaidUpdateActivityFromSchedule(99)`；进食、跟随、拾取、自愈、换气、灭火、空闲、坐下都在 CORE/IDLE/REST 等独立活动注册，与本行为并行运行。**真正的问题是移动指令竞争**：CORE 的 `MaidFollowOwnerTask(0.5F,2)`、`MaidPanicTask`、`MaidSwimJumpTask`、`MaidClimbTask`、`MaidBreathAirTask` 与本行为都会写 `WALK_TARGET`（`BehaviorUtils.setWalkAndLookTargetMemories` 同时写 `walk_target` 与 `look_target`），而 vanilla `Brain.startEachNonRunningBehavior` **只按优先级 TreeMap 顺序 `tryStart`、没有任何互斥门控**（已核实，附录 D.3.7），`tickEachRunningBehavior` 会逐个体 tick ⇒ **同活动不同优先级的行为可以同时 RUNNING**，本行为每 6 tick 覆写一次移动意图 | 明确与 CORE 行为的协作：当跟随主人/恐慌/换气等安全行为生效时让出移动控制（或统一经 `TARGET_POS` 约定协调），避免"一边被拽向主人、一边往隧道里走"的抖动；挖矿行为保持在工作活动中，**不要**试图独占大脑（`IExtraMaidBrain` 是全局追加、对所有女仆生效，不适用于任务专属行为） | 主人远离/被攻击/水下缺氧时挖矿行为不与安全行为对抗；女仆无来回抖动 |
 | **MM-604** ✅ | P2 | S | `:72-76` `stop()` 只清 `WALK_TARGET` + 停止导航；工具是"借"到主手的（`equipPickaxe`），停止时未归还 | 停止时完整清理：用 `TaskEquipUtil.putMainHandBack(maid)` 归还镐子、释放目标预约、持久化进度、上报统计（附录 D.2 有现成 API） | 任务切换 100 次无状态泄漏（内存/物品都守恒） |
 | **MM-605** | P2 | S | 无会话统计 | 会话统计：挖矿数、耗时、耗材、损坏工具、放弃原因分布 | `/maidmining stats` 可查 |
@@ -505,8 +505,35 @@ public interface MiningStats {
 |------|------|---------|----------------|
 | **1.0.1** | **止血热修**（正确性/安全） | MM-501、MM-509、MM-901、MM-401、MM-502、MM-302、MM-101（含核实）、MM-110、MM-801、MM-902、MM-903、MM-308 | 复制漏洞有回归测试并修复；展示位不被消耗；专用服务器可启动；默认不进岩浆、不吃贵重方块、不破坏容器；深层矿丢弃率 ≤ 5%；构建 + GameTest 全绿 |
 | **1.1.0** | **移动根治（1×2 隧道 + 不卡住）+ 性能与配置** | MM-304、MM-305、MM-306、MM-110①、MM-102、MM-103、MM-104、MM-105、MM-701、MM-702、MM-704、MM-805、MM-803、MM-301、MM-503、MM-507、MM-606 | 隧道截面 1×2（净高 = 女仆碰撞箱）；1 格宽竖井上行不卡；顶墙空转/上爬循环 ≤ 3 秒被识别；基岩邻近的矿默认不再跳过；§2.2 性能预算达标；配置项 ≥ 35 |
-| **1.2.0** | **决策质量与体验** | MM-201、MM-202、MM-110②、MM-203、MM-204、MM-303、MM-303b、MM-307、MM-309、MM-402、MM-403、MM-404、MM-406、MM-505、MM-504、MM-111、MM-602、MM-601、MM-802、MM-804、MM-603 | 平均 ≤ 2.0 s/矿；锁定成功率 ≥ 98%；女仆不死；背包自动收纳；状态机拆分完成且有单测；时运/精准采集生效；**删除 `isNearBedrock`，基岩旁的矿可正常开采** |
-| **2.0.0** | **生态与长期演进** | MM-107、MM-206、MM-205、MM-207、MM-310、MM-311、MM-405、MM-407、MM-508、MM-703、MM-906、MM-907、MM-1005 | 多女仆协作可用；挖掘模式可选；CI 化；发布元数据完整 |
+| **1.2.0** | **决策质量与体验** | MM-201、MM-203、MM-204、MM-307、MM-309、MM-402、MM-403、MM-404、MM-406、MM-504、MM-802、MM-804、MM-603 | 平均 ≤ 2.0 s/矿；女仆不死；背包自动收纳；状态机拆分完成且有单测 |
+| **2.0.0** | **生态与长期演进** | MM-107、MM-206、MM-205、MM-207、MM-310、MM-311、MM-405、MM-407、MM-703、MM-906、MM-907、MM-1005 | 多女仆协作可用；挖掘模式可选；CI 化；发布元数据完整 |
+
+> **已从路线图移除**：MM-202（可达性探测 / 绕墙寻路）、MM-303 下半（挖掘时间模型）、
+> MM-508（经验球拾取）、MM-602（黑名单持久化）、MM-110②（删除基岩跳过规则）。
+> 原因见下方 §4.5「有意不实施的设计」。
+
+---
+
+## 4.5 有意不实施的设计（2026-10-04 确认）
+
+以下条目**经确认不实施**。它们不是"还没来得及做"，而是**权衡后的产品决定**——
+记在这里是为了避免日后反复讨论，也避免被误当成缺陷报告给用户。
+
+| 条目 | 原设想 | 不做的理由 |
+|---|---|---|
+| **MM-303 下半**（挖掘时间模型） | 按方块硬度与工具速度计算挖掘耗时，带裂纹与音效 | **让效率附魔有了意义**，但代价是女仆节奏变慢、且要处理"挖到一半被打断"的复杂状态（目标变了、工具断了、被保护了）。瞬时破坏让行为可预测、状态机简单。**效率附魔的位置已在 `ToolManager` 评分里预留**，若将来想做，不需要改工具选择逻辑 |
+| **MM-508**（经验球拾取） | 让耐久修补有实际效果 | **与"默认不消耗耐久"的设定直接冲突**。既然镐子不会坏，经验修补就没有作用对象。想要磨损感的服务器管理员可打开 `dig.damageTool` |
+| **MM-602**（黑名单持久化） | 目标、隧道进度、会话统计写入 NBT | 黑名单是**会话级短期记忆**，用途是"这次别再撞同一面墙"。重载后清空是**正确的**——世界已经变了（玩家可能已经打通那条路），旧失败记录未必还有效。持久化反而会让女仆固执地绕开早已挖通的路 |
+| **MM-202**（可达性探测 / 绕墙寻路） | 有界 Dijkstra/A* 先判可行性，不可达直接拉黑 | **取舍明确**：与其让女仆在深处闷头挖几十格后失败，不如立刻换下一个目标。**放弃得越快，女仆的总体产出越高**——这是矿工模组该有的行为。配套地，`skipNearBedrock` 默认开启（见 §1.5-A 第五轮实机反馈） |
+| **MM-110②**（删除基岩跳过规则） | 规划器落地后删掉 `isNearBedrock` | 依赖 MM-202，既然不做规划器，**规则保留**。当前实测表现稳定（深层不再出现碎裂循环） |
+
+**⚠️ 与 §1.5-A 的关系**：那条"基岩邻近就跳过"的规则最初是为掩盖"女仆被基岩卡住"
+而加的补偿。1.0.x/1.01 已通过**失败分类 + 净 Y 漂移检测 + 立即放弃目标**治好了卡死本身
+（MM-305/306），规则因此从"掩盖 bug"变成"产品选择"——即使能挖到深层矿，
+跳过也是合理的（见上表 MM-202 行）。
+
+**将来若要重启这些条目**，先回答一个问题：**它会让女仆挖得更多，还是只是更复杂？**
+只带来复杂度的不做。
 
 ---
 
