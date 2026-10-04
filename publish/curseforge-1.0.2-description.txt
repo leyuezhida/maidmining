@@ -1,0 +1,58 @@
+Maid Mining
+===========
+A Touhou Little Maid extension that gives maids the ability to
+autonomously mine ores. Just give your maid a pickaxe and switch her
+task mode to Mining - she will do the rest!
+
+FEATURES
+--------
+- Enchanted pickaxes work as they do for a player: Fortune increases
+  ore yield and Silk Touch keeps the block itself
+- Automatic ore search within a 3x3 chunk radius (48 blocks)
+- Tunnel digging: the maid automatically digs tunnels to reach ores
+- Scaffold climbing: navigates vertical terrain by placing and climbing
+  blocks, using only cheap filler blocks - never your diamonds or chests
+- Offhand targeting: put a raw ore, ingot, dust or gem in the maid's
+  offhand to mine only that ore type
+- Configurable: 35 server-side options (search radius, behaviour, safety,
+  compatibility) - no more hardcoded values
+- Safe by default: the maid refuses to enter lava, consumes no tool
+  durability, and never digs up containers or player valuables
+- Cross-mod compatibility: supports Forge and Fabric ore tags, plus any
+  mod pickaxe that behaves like a pickaxe
+
+REQUIREMENTS
+------------
+- Minecraft: 1.20.1
+- Forge: 47.4.22+
+- Touhou Little Maid: 1.5.3+
+  (both client and server)
+
+HOW TO USE
+----------
+1. Give your maid a pickaxe (iron or better); enchanted pickaxes work
+2. (Optional) Put a raw ore in her offhand to target a specific ore type
+3. Open the maid's task menu and select Mining
+4. She will automatically search for ores and dig tunnels to reach them
+
+NOTES
+-----
+- Breaking blocks is instantaneous, so Efficiency and Mending have no
+  effect by design. The maid also does not consume pickaxe durability
+  by default; both can be changed in the config.
+- The maid digs real tunnels, so use her in a resource area or a
+  dedicated save.
+- Protection mods that hook Forge's entity block-break event can stop
+  her. For stricter protection (most land-claim plugins), enable
+  compat.fakePlayerMode in the config so she breaks blocks through the
+  player code path.
+- Server config file: <world>/serverconfig/maidmining-server.toml
+
+LICENSE
+-------
+This project is licensed under the MIT License.
+
+LINKS
+-----
+Source Code: https://github.com/leyuezhida/maidmining
+Issues: https://github.com/leyuezhida/maidmining/issues
