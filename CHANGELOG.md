@@ -30,7 +30,11 @@
 - **扫描性能** —— 先按区块段跳过全空气段、再用调色板预过滤；搜索热路径不再每格分配对象（旧版一轮约 49 万次分配）。挖不到矿时冷却逐次翻倍，不再每 6 秒空转一轮全量扫描。
 - **可选的「领地保护兼容模式」** —— 默认关闭。开启后女仆改用假玩家走玩家破坏路径，绝大多数领地/保护模组即可正常拦截（默认模式下它们只能通过另一类事件 veto）。适合服务器管理员按需启用。
 - **任务启用条件** —— 女仆界面现在会显示「需要镐子」，并可判断是否满足。
-- **自动化测试扩充到 19 项** —— 新增附魔适配（时运/精准采集/耐久）、物品守恒、展示位保护用例。
+- **自动化测试扩充到 24 项** —— 新增附魔适配（时运/精准采集/耐久）、物品守恒、展示位保护，
+  以及精准采集的场景覆盖（深板岩变体、下界合金镐、与时运并存时的优先级、从背包换手、非矿石方块）。
+- **破坏诊断日志** —— 把 `diag.logLevel` 设为 `DEBUG` 后，每次破坏都会打出工具、附魔等级与
+  实际产出。附魔是否生效无法从外部现象推断（「挖石头掉圆石」既可能是没附魔、附魔没读到，
+  也可能是掉落表被改），有日志才能区分。
 
 ### 调整
 
@@ -71,7 +75,10 @@ Two focuses: **pickaxe enchantments finally work**, and a **code structure refac
 - **Faster scanning** — skips all-air sections, uses palette pre-filtering, and allocates nothing per block (was ~489k allocations per pass). Empty scans now back off exponentially.
 - **Optional claim-protection compatibility mode** (off by default) that breaks blocks via a fake player so most land-claim mods can intercept them.
 - **Task enable condition** ("needs a pickaxe") shown in the maid GUI.
-- **19 GameTests**, covering enchantments, item conservation and display-slot protection.
+- **24 GameTests**, covering enchantments, item conservation, display-slot protection, and Silk Touch
+  across its variants (deepslate ores, netherite pickaxe, coexisting Fortune, equipping from backpack).
+- **Break diagnostics** — with `diag.logLevel = DEBUG`, every break logs the tool, its enchantment
+  levels and the actual drops. Whether an enchantment applied cannot be inferred from the outside.
 
 **Changed**
 

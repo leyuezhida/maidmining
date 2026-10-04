@@ -167,7 +167,12 @@ public class EnchantmentGameTests {
         helper.succeed();
     }
 
-    /** 对照组：不带附魔的镐子挖钻石矿应当得到钻石粒，而不是方块。 */
+    /**
+     * 对照组：不带附魔的镐子挖钻石矿应当得到钻石粒，而不是方块。
+     * <p>
+     * 深层变体（深板岩矿）与"换手""镐等级""时运并存"等变体见
+     * {@link EnchantmentCoverageTests}，那里是场景覆盖的主场。
+     */
     @GameTest(template = TEMPLATE)
     public static void plainPickaxeDropsRawDiamond(GameTestHelper helper) {
         helper.setBlock(1, 1, 1, Blocks.DIAMOND_ORE);

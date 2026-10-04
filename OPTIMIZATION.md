@@ -536,8 +536,14 @@ Select-String -Path run\logs\latest.log -Pattern "Logging into server with mod l
 
 ### 6.2 GameTest 场景清单（MM-1002）
 
-> **状态**：基础设施已建立并可用（`./gradlew runGameTestServer`，约 23 秒，无需客户端）。
-> ✅ 已实现：破坏分类语义 7 例（见 §9）。⏳ 待实现：下表里所有**需要女仆实体**的场景。
+> **状态**：基础设施已建立并可用（`./gradlew runGameTestServer`，约 55 秒，无需客户端）。
+> ✅ **已实现 24 例**，分布在三个测试类：
+> - `MiningValidatorGameTests`（13 例）—— 破坏分类语义、副手解析、镐子识别、矿石材料覆盖
+> - `EnchantmentGameTests`（6 例）—— 时运平均产量、精准采集、耐久默认不消耗、物品守恒、展示位
+> - `EnchantmentCoverageTests`（5 例）—— 精准采集的**场景覆盖**（深板岩变体、下界合金镐、
+>   时运并存时的优先级、**从背包换手**、非矿石方块）
+>
+> ⏳ 待实现：下表里所有需要更多实体交互的场景。
 > 结构模板：仓库根 `gameteststructures/*.snbt`（Forge 从 `<世界目录>/gameteststructures/` 读取，`build.gradle` 自动同步）。
 
 | 场景 | 断言 | 关联 |
@@ -558,6 +564,20 @@ Select-String -Path run\logs\latest.log -Pattern "Logging into server with mod l
 | 沙砾柱下方挖矿 | 女仆不受窒息伤害 | MM-404 |
 | 背包满 | 进入 UNLOAD 并成功交付 | MM-504 |
 | 存档保存 → 重载 | 目标与黑名单保留 | MM-602 |
+
+> **新增：实机附魔类问题的排查手段（2026-10-04）**
+>
+> 附魔是否生效**无法从外部现象推断**：「挖石头掉圆石」同时可能是
+> 镐子没附魔、附魔没读到、掉落表被改，三者现象完全一致。
+> 因此 `DigExecutor` 在 `diag.logLevel = DEBUG` 时会逐次打出：
+> ```
+> [DIAG-drops] pos=(x,y,z) tool=minecraft:diamond_pickaxe silk=true drops=[minecraft:deepslate_diamond_ore x1]
+> [DIAG-dig]   dig-failed (x,y,z) reason=... block=... tool=... toolNbt=... silk=0 fortune=0
+> ```
+> 实机排查附魔问题时**先开 DEBUG 再看日志**，不要靠猜。
+> ⚠️ 另外注意：`Mined` / `Locked ore` 是 INFO 级，而默认 `logLevel=WARN`，
+> 所以搜不到这些行**不代表没挖到矿** —— 我曾据此误判过一次。
+
 
 ### 6.3 手动回归清单（每个里程碑必跑）
 
@@ -668,9 +688,9 @@ EntityMaid, ItemStack)` 是 **public 且接受工具栈**，`maid.destroyBlock(l
 权重：精准采集 400、时运 300、效率 20、耐久修补 15（各乘等级），基础等级 ×100，耐久 0..99。
 换手仍走 `TaskEquipUtil.tryEquipFromBackpack`（交换语义、无复制），失败才手工 swap。
 
-**GameTest（MM-1002/1003）**：新增 6 个用例共 19 个，**已反向验证有效性**——
+**GameTest（MM-1002/1003）**：共 24 个用例，**已反向验证有效性**——
 把 `useRealToolForDrops` 改为 false 后 `silkTouchKeepsTheOreBlock` 与
-`fortuneIncreasesDiamondYield` 立即变红，恢复后 19 项全绿。
+`fortuneIncreasesDiamondYield` 立即变红，恢复后 24 项全绿。
 > ⚠️ 时运用例踩过一个坑：时运走 `apply_bonus → ApplyBonusCount$UniformBonusCount`，
 > 内部是 `random.nextInt(bonusMultiplier + 1)`（已核实字节码）⇒ **单次挖掘结果是随机的**，
 > 断言"单次 > 1"会随机变红。改为采样 40 次比平均值。
@@ -732,6 +752,34 @@ EntityMaid, ItemStack)` 是 **public 且接受工具栈**，`maid.destroyBlock(l
 - 可达性探测与矿脉延续 —— MM-202 / MM-203。
 - `/maidmining` 指令族 —— MM-803。
 - 每女仆配置 GUI —— MM-703。
+
+### 2026-10-04 · 追加：实机误报「精准采集无效」
+
+**结论：不是 bug。** 测试时用的镐子没附上精准采集（`lvl:0`），女仆手上是一把普通镐。
+附魔适配本身正常。
+
+**排查过程中排除了什么**（这些排除本身有价值，记录下来免得下次重走）：
+| 怀疑 | 排除依据 |
+|---|---|
+| 整合包 KubeJS 改了矿石掉落表 | `server_scripts/Loot Table.js` 只改生物与战利品箱；`kubejs/data/` 下只有结构生成与世界生成 |
+| 资源包覆盖掉落表 | 13 个 zip 全部检查，无 `loot_tables/blocks/{iron_ore,stone,diamond_ore}` |
+| 世界/全局数据包 | `saves/新的世界/datapacks` 为空，无全局 datapacks |
+| 附魔机制被 Apotheosis 之类改写 | 整合包无该类模组 |
+| Create 系接管破坏流程 | 181 个模组中无 Create 系 |
+| 掉落表本身缺少 silk 分支 | `deepslate_diamond_ore.json` 与 `diamond_ore.json` 内容一致，均含 `match_tool` + `silk_touch` |
+
+**留下的东西**：
+1. `DigExecutor` 的诊断日志（`diag.logLevel = DEBUG` 时输出
+   `[DIAG-drops]` / `[DIAG-dig]`）。附魔是否生效**无法从外部现象推断**——
+   「挖石头掉圆石」同时对应「镐子没附魔」「附魔没读到」「掉落表被改」三种原因。
+2. `EnchantmentCoverageTests` 5 例场景覆盖（深板岩变体、下界合金镐、与时运并存的优先级、
+   **从背包换手**、非矿石方块）。换手那条最关键——附魔在 NBT 上，取出/放回实现出 bug 只有它能抓到。
+
+**我犯的两个方法错误（已写进 HANDOFF 第 4.2 节）**：
+- **没核对 `logLevel` 就解读日志**：`Mined`/`Locked` 是 INFO 级，默认门槛是 WARN，
+  搜不到**不代表没发生**。我据此误判"4 分钟一次矿都没挖到"，白排查一轮。
+- **在没有诊断数据时靠现象排除法**：本次是运气好（真有其他原因可查），
+  下次可能是"代码没问题只是测试方法错了"，那就得靠日志而不是靠推理。
 
 ### 2026-09-20 · 第一批：§1.5 的两个历史妥协（1.1.0 起步）
 
