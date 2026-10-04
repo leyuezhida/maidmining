@@ -1,6 +1,7 @@
 package com.leyue.maidmining.mining;
 
 import com.leyue.maidmining.MaidMiningMod;
+import com.leyue.maidmining.cfg.MiningConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -112,6 +113,15 @@ public final class MiningValidator {
      */
     public static boolean isOre(BlockState state) {
         return oreBlockSet().contains(state.getBlock());
+    }
+
+    /** 标签更新（数据包重载）后调用：清掉矿石与副手缓存，下一次访问时重建。 */
+    public static synchronized void invalidateCaches() {
+        oreBlocks = null;
+        oreBlockMaterials = null;
+        oreMaterials = null;
+        cachedValid = false;
+        cachedOffhand = ItemStack.EMPTY;
     }
 
     private static Set<Block> oreBlockSet() {
@@ -396,7 +406,7 @@ public final class MiningValidator {
             return BreakResult.FLUID;
         }
         float speed = state.getDestroySpeed(level, pos);
-        if (speed < 0.0F || speed >= MiningConfig.MAX_DIGGABLE_HARDNESS) {
+        if (speed < 0.0F || speed >= MiningConfig.maxDiggableHardness()) {
             return BreakResult.UNBREAKABLE;
         }
         return BreakResult.SUCCESS;

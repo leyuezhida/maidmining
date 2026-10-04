@@ -4,7 +4,9 @@ import com.github.tartaricacid.touhoulittlemaid.api.task.IMaidTask;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.google.common.collect.Lists;
 import com.leyue.maidmining.MaidMiningMod;
+import com.leyue.maidmining.inv.MaidInventory;
 import com.leyue.maidmining.mining.MiningTunnelBehavior;
+import com.leyue.maidmining.mining.MiningValidator;
 import com.mojang.datafixers.util.Pair;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
@@ -12,7 +14,6 @@ import net.minecraft.world.entity.ai.behavior.BehaviorControl;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
 
@@ -42,15 +43,47 @@ public class MiningTask implements IMaidTask {
     public ItemStack getIcon() { return new ItemStack(Items.IRON_PICKAXE); }
 
     @Override
-    public List<Pair<String, Predicate<EntityMaid>>> getConditionDescription(EntityMaid maid) {
-        return Collections.emptyList();
-    }
-
-    @Override
     public SoundEvent getAmbientSound(EntityMaid maid) { return null; }
 
     @Override
     public List<Pair<Integer, BehaviorControl<? super EntityMaid>>> createBrainTasks(EntityMaid maid) {
         return Lists.newArrayList(Pair.of(1, new MiningTunnelBehavior()));
+    }
+
+    /**
+     * 启用条件（MM-903）。
+     * <p>
+     * TLM 会为每个条件生成文案键 {@code task.<ns>.<path>.condition.<name>}，
+     * 这里正好把 1.0.x 就写下但一直没被引用的 {@code ...condition.pickaxe} 键接上。
+     */
+    @Override
+    public List<Pair<String, Predicate<EntityMaid>>> getEnableConditionDesc(EntityMaid maid) {
+        return Lists.newArrayList(
+                Pair.of("pickaxe", m -> MiningValidator.isPickaxe(m.getMainHandItem())
+                        || hasPickaxeInBackpack(m)));
+    }
+
+    private static boolean hasPickaxeInBackpack(EntityMaid maid) {
+        var inv = maid.getMaidInv();
+        for (int slot = 0; slot < inv.getSlots(); slot++) {
+            if (slot == MaidInventory.DISPLAY_SLOT) {
+                continue;
+            }
+            if (MiningValidator.isPickaxe(inv.getStackInSlot(slot))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 让玩家能在 TLM 女仆界面里看到女仆当前在干什么（MM-804）。
+     * <p>
+     * TLM 默认返回 {@code getUid().getPath()}（即 "mining"），玩家看不懂；
+     * 这里返回可翻译的文案，中英双语只维护在语言文件这一份事实源。
+     */
+    @Override
+    public String getMaidActionSummary() {
+        return getUid().getNamespace() + ".maid_action_summary";
     }
 }

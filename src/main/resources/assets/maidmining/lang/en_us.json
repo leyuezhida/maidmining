@@ -1,5 +1,12 @@
 {
     "task.maidmining.mining": "Mining",
-    "task.maidmining.mining.desc": "Mine ores within a 3×3 chunk radius. Put raw ore in offhand to target specific types.",
-    "task.maidmining.mining.condition.pickaxe": "pickaxe"
+    "task.maidmining.mining.desc": "Searches for ores within a 3×3 chunk radius and digs tunnels to reach them. Put a raw ore in the offhand to target one ore type. Enchanted pickaxes work as expected: Fortune increases yield and Silk Touch keeps the block itself.",
+    "task.maidmining.mining.condition.pickaxe": "needs a pickaxe",
+    "maidmining.maid_action_summary": "Mining",
+    "maidmining.state.searching": "Searching for ores",
+    "maidmining.state.travelling": "Digging towards the ore",
+    "maidmining.state.mining": "Mining the ore",
+    "maidmining.msg.no_pickaxe": "I need a pickaxe before I can mine!",
+    "maidmining.msg.no_ore_found": "I could not find any ore nearby.",
+    "maidmining.msg.backpack_full": "My backpack is full, so some ore was left on the ground."
 }

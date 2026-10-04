@@ -38,3 +38,6 @@ forge*changelog.txt
 
 # Private handoff doc (contains credentials - DO NOT COMMIT)
 HANDOFF.md
+
+# WorkBuddy local data
+.workbuddy

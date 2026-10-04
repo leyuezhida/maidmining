@@ -1,5 +1,12 @@
 {
     "task.maidmining.mining": "挖矿",
-    "task.maidmining.mining.desc": "自动搜索周围 3×3 区块内的矿石。副手放原矿可指定只挖对应类型。",
-    "task.maidmining.mining.condition.pickaxe": "镐子"
+    "task.maidmining.mining.desc": "自动搜索周围 3×3 区块内的矿石并挖隧道前往。副手放原矿可指定只挖对应类型。附魔镐照常生效：时运增加产量，精准采集可拿到矿石方块。",
+    "task.maidmining.mining.condition.pickaxe": "需要镐子",
+    "maidmining.maid_action_summary": "挖矿中",
+    "maidmining.state.searching": "正在搜索矿石",
+    "maidmining.state.travelling": "正在挖向矿石",
+    "maidmining.state.mining": "正在挖矿",
+    "maidmining.msg.no_pickaxe": "我没有镐子，无法挖矿！",
+    "maidmining.msg.no_ore_found": "附近没有找到矿石。",
+    "maidmining.msg.backpack_full": "背包满了，部分掉落留在了地上。"
 }

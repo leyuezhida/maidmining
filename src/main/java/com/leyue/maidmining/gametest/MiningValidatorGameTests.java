@@ -1,8 +1,8 @@
 package com.leyue.maidmining.gametest;
 
 import com.leyue.maidmining.MaidMiningMod;
+import com.leyue.maidmining.cfg.MiningConfig;
 import com.leyue.maidmining.mining.BreakResult;
-import com.leyue.maidmining.mining.MiningConfig;
 import com.leyue.maidmining.mining.MiningValidator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
@@ -75,7 +75,7 @@ public class MiningValidatorGameTests {
     }
 
     /**
-     * 黑曜石（硬度 50）当前被 {@link MiningConfig#MAX_DIGGABLE_HARDNESS} 判为不可挖。
+     * 黑曜石（硬度 50）当前被 {@code dig.maxDiggableHardness} 判为不可挖。
      * 这是「不值得挖」的启发式而非物理事实，用例把它固定下来，
      * 以便 MM-303（挖掘时间模型）改动时能看见行为变化。
      */
@@ -121,8 +121,8 @@ public class MiningValidatorGameTests {
      */
     @GameTest(template = TEMPLATE)
     public static void bedrockSkipRuleIsCurrentlyEnabled(GameTestHelper helper) {
-        helper.assertTrue(MiningConfig.SKIP_NEAR_BEDROCK,
-                "SKIP_NEAR_BEDROCK 目前刻意开启（见 §1.5-A / §9 第五轮）；要关闭请先读那两节并同步更新本用例");
+        helper.assertTrue(MiningConfig.skipNearBedrock(),
+                "skipNearBedrock 目前刻意开启（见 §1.5-A / §9 第五轮）；要关闭请先读那两节并同步更新本用例");
         helper.succeed();
     }
 
