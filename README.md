@@ -1,5 +1,7 @@
 # Maid Mining
 
+<img src="publish/icon-512x512.png" width="96" alt="Maid Mining icon">
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1%20%7C%201.21.1-green.svg)](#versions)
 [![Forge](https://img.shields.io/badge/Forge-47.4.22-red.svg)](https://files.minecraftforge.net/)
