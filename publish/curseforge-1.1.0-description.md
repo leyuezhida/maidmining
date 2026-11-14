@@ -20,13 +20,15 @@ What counts as a valid target — and which tools she may use — is no longer h
 - **Hot-reloaded config** — edit the file or the screen and the next decision already uses the new lists
 - **Cross-mod compatibility** — ore and pickaxe tags (Forge / common tags), plus any modded tool that behaves like a pickaxe
 
-## Requirements
+## Downloads
 
-- **Minecraft 1.20.1 + Forge 47.4.22+** → `maidmining-1.1.0.jar`
-- **Minecraft 1.21.1 + NeoForge 21.1.219+** → separate download, same file name
-- **Touhou Little Maid 1.5.3+** for the matching loader, on client and server
-  - 1.20.1: `touhoulittlemaid 1.5.3-forge+mc1.20.1`
-  - 1.21.1: `touhoulittlemaid 1.5.3-neoforge+mc1.21.1`
+- **Minecraft 1.20.1 + Forge 47.4.22+** → `maidmining-1.1.0-forge-1.20.1.jar`
+- **Minecraft 1.21.1 + NeoForge 21.1.219+** → `maidmining-1.1.0-neoforge-1.21.1.jar`
+
+Both need Touhou Little Maid **1.5.3+** for the matching loader, on client and server:
+
+- 1.20.1: `touhoulittlemaid 1.5.3-forge+mc1.20.1`
+- 1.21.1: `touhoulittlemaid 1.5.3-neoforge+mc1.21.1`
 
 ## How to use
 
