@@ -1,0 +1,46 @@
+# IDE
+bin
+out
+*.launch
+.settings
+.metadata
+.classpath
+.project
+*.ipr
+*.iws
+*.iml
+.idea
+.vscode
+
+# Gradle
+build
+.gradle
+!gradle/wrapper/gradle-wrapper.jar
+
+# Minecraft 运行目录 / 日志
+run
+run-data
+logs
+*.log
+build*.log
+gametest.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Mod 输出
+mcmodsrepo/
+eclipse
+
+# WorkBuddy 本地数据
+.workbuddy
+
+# 反编译的 TLM 源码（仅用于对照 API，可由 libs/tlm-sources.jar 重新解压）
+tlm-src/
+
+# 编译期依赖 jar：体积大且属第三方版权，不入库。获取方式见 libs/README.md
+libs/*.jar
+
+# 本机路径相关（gradle.properties 里的 JDK 路径换机器要自己改）
+local.properties

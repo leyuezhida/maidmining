@@ -1,0 +1,34 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+issueTrackerURL = "https://github.com/leyuezhida/maidmining/issues"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''${mod_description}'''
+logoFile = "logo.png"
+
+[[dependencies.${mod_id}]]
+modId = "neoforge"
+type = "required"
+versionRange = "${neo_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+# 车万女仆是硬前置：任务的注册、女仆实体、背包与破坏逻辑全部来自它
+[[dependencies.${mod_id}]]
+modId = "touhou_little_maid"
+type = "required"
+versionRange = "${tlm_version_range}"
+ordering = "NONE"
+side = "BOTH"
