@@ -1,7 +1,5 @@
 # Maid Mining
 
-![Maid Mining](docs/banner.png)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1%20%7C%201.21.1-green.svg)](#versions)
 [![NeoForge](https://img.shields.io/badge/NeoForge-21.1.219-orange.svg)](https://neoforged.net/)
