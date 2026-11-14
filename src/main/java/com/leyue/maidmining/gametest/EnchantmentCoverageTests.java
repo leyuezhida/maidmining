@@ -155,7 +155,7 @@ public class EnchantmentCoverageTests {
         maid.getMaidInv().setStackInSlot(0, silk);
         maid.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
 
-        ToolManager.ensureBestPickaxe(maid);
+        ToolManager.ensureBestTool(maid);
 
         ItemStack hand = maid.getMainHandItem();
         helper.assertTrue(hand.getEnchantmentLevel(Enchantments.SILK_TOUCH) >= 1,

@@ -268,7 +268,7 @@ public class EnchantmentGameTests {
         // 槽位 0 放一把木镐，木镐分数低于钻石镐 —— 若实现读了展示位就会选错
         maid.getMaidInv().setStackInSlot(0, new ItemStack(Items.WOODEN_PICKAXE));
 
-        ToolManager.ensureBestPickaxe(maid);
+        ToolManager.ensureBestTool(maid);
 
         helper.assertTrue(count(maid, Items.DIAMOND_PICKAXE) == 1,
                 "展示位里的钻石镐必须原样保留（数量仍为 1），实际=" + count(maid, Items.DIAMOND_PICKAXE));

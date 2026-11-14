@@ -68,6 +68,19 @@ public final class MiningConfigSpec {
     public static final ForgeConfigSpec.ConfigValue<List<? extends Object>> SCAFFOLD_WHITELIST;
     public static final ForgeConfigSpec.ConfigValue<List<? extends Object>> SCAFFOLD_BLACKLIST;
 
+    // ==================== 工具（1.1.0） ====================
+
+    public static final ForgeConfigSpec.ConfigValue<List<? extends Object>> TOOL_WHITELIST;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends Object>> TOOL_BLACKLIST;
+    public static final ForgeConfigSpec.BooleanValue REQUIRE_CORRECT_TOOL;
+
+    // ==================== 目标（1.1.0） ====================
+
+    public static final ForgeConfigSpec.EnumValue<TargetMode> TARGET_MODE;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends Object>> TARGET_WHITELIST;
+    public static final ForgeConfigSpec.ConfigValue<List<? extends Object>> TARGET_BLACKLIST;
+    public static final ForgeConfigSpec.BooleanValue OFFHAND_TARGETING;
+
     // ==================== 安全 ====================
 
     public static final ForgeConfigSpec.BooleanValue ALLOW_LAVA;
@@ -77,7 +90,6 @@ public final class MiningConfigSpec {
     // ==================== 观测 ====================
 
     public static final ForgeConfigSpec.EnumValue<LogLevel> LOG_LEVEL;
-    public static final ForgeConfigSpec.BooleanValue SHOW_ACTION_SUMMARY;
 
     // ==================== 兼容 ====================
 
@@ -99,6 +111,21 @@ public final class MiningConfigSpec {
         MAID,
         /** 用 FakePlayer 走玩家破坏路径，绝大多数领地 mod 的 {@code BlockEvent.BreakEvent} 能拦截。 */
         FAKE_PLAYER
+    }
+
+    /**
+     * 目标方块的范围（1.1.0，MM-1101）。
+     * <p>
+     * 1.0.x 里"找什么"是写死的：必须命中矿石标签或 {@code _ore} 命名。
+     * 现在三档可选，默认保持原行为，老存档升级后不需要改任何配置。
+     */
+    public enum TargetMode {
+        /** 默认。只找矿石（标签 + {@code _ore} 命名 + {@code ores/<材料>} 子标签）。 */
+        ORES,
+        /** 只找 {@code targets.whitelist} 列出的方块；留空则什么都不挖。 */
+        WHITELIST,
+        /** 矿石 ∪ 白名单。想把沙砾、黏土这类方块也纳入目标，用这一档最省事。 */
+        ORES_AND_WHITELIST
     }
 
     static {
@@ -243,6 +270,57 @@ public final class MiningConfigSpec {
                         o -> o instanceof String);
         builder.pop();
 
+        // ---------- 工具 ----------
+        builder.comment("Tools: which items the maid may hold while working.",
+                "Defaults to pickaxes; add entries to allow more, remove them to restrict.").push("tools");
+        TOOL_WHITELIST = builder
+                .comment("Items the maid may use, by registry id, #tag or wildcard (mod:*, mod:*_pickaxe).",
+                        "Defaults to the pickaxe tags. Keeping a pickaxe tag in this list also keeps",
+                        "the built-in 'any pickaxe' detection (covers modded pickaxes without tags).",
+                        "Remove all pickaxe tags to allow only the listed items.",
+                        "Examples: \"minecraft:iron_shovel\", \"mekanism:*\", \"#minecraft:axes\"")
+                .defineListAllowEmpty("whitelist",
+                        List.of("#minecraft:pickaxes", "#forge:tools/pickaxes", "#c:tools/pickaxes"),
+                        o -> o instanceof String);
+        TOOL_BLACKLIST = builder
+                .comment("Never used, whatever the whitelist says. Wins over the whitelist.",
+                        "Example: \"minecraft:wooden_pickaxe\" to stop the maid from grabbing junk.")
+                .defineListAllowEmpty("blacklist", List.of(), o -> o instanceof String);
+        REQUIRE_CORRECT_TOOL = builder
+                .comment("Require the tool to be the correct tool for the target block, tier included.",
+                        "ON (default): a listed shovel will not mine stone, and a stone pickaxe will not",
+                        "touch diamond ore -- the same rules a player gets.",
+                        "OFF: any listed item can break any target, using that item's own drop rules.",
+                        "Only turn this off for deliberately cheaty setups.")
+                .define("requireCorrectTool", true);
+        builder.pop();
+
+        // ---------- 目标 ----------
+        builder.comment("Targets: which blocks the maid goes looking for.",
+                "Defaults keep her on ores only; widen this deliberately per server.").push("targets");
+        TARGET_MODE = builder
+                .comment("ORES (default): ores only, exactly like 1.0.x.",
+                        "WHITELIST: only the blocks listed in targets.whitelist.",
+                        "ORES_AND_WHITELIST: both -- the easy way to also collect gravel, clay or stone.")
+                .defineEnum("mode", TargetMode.ORES);
+        TARGET_WHITELIST = builder
+                .comment("Extra blocks to mine, by registry id, #tag or wildcard (mod:*, minecraft:*_ore).",
+                        "Only used when targets.mode is WHITELIST or ORES_AND_WHITELIST.",
+                        "Examples: \"minecraft:gravel\", \"minecraft:clay\", \"minecraft:andesite\"",
+                        "Watch search.heightUp: the default only searches 3 blocks above the maid.")
+                .defineListAllowEmpty("whitelist", List.of(), o -> o instanceof String);
+        TARGET_BLACKLIST = builder
+                .comment("Never targeted, even when the mode or a tag would include it.",
+                        "Wins over everything else, including the ore tags.",
+                        "Example: \"minecraft:copper_ore\" to stop the maid filling up on copper.")
+                .defineListAllowEmpty("blacklist", List.of(), o -> o instanceof String);
+        OFFHAND_TARGETING = builder
+                .comment("Let the offhand item narrow the target, as in 1.0.x.",
+                        "An ore material (raw iron, iron ore, iron ingot...) targets that ore.",
+                        "A block item targets exactly that block (gravel block -> gravel only).")
+                .define("offhandTargeting", true);
+        builder.pop();
+
         // ---------- 安全 ----------
         builder.comment("Safety: what the maid refuses to touch, and when she gives up.").push("safety");
         ALLOW_LAVA = builder
@@ -262,10 +340,6 @@ public final class MiningConfigSpec {
                 .comment("Lowest level of maidmining log lines to emit. INFO is verbose (one line per ore);",
                         "WARN keeps only what a player would actually want to know.")
                 .defineEnum("logLevel", LogLevel.WARN);
-        SHOW_ACTION_SUMMARY = builder
-                .comment("Report what the maid is currently doing through TLM's action summary,",
-                        "so the player can read it in the maid GUI instead of guessing.")
-                .define("showActionSummary", true);
         builder.pop();
 
         // ---------- 兼容 ----------

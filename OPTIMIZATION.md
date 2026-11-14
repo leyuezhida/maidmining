@@ -333,10 +333,12 @@ MiningTunnelBehavior.tick()  ← 每 tick 由女仆大脑调用，永不退出�
 
 | 编号 | P | W | 现状证据 | 优化目标 | 验收标准 |
 |------|---|---|---------|---------|---------|
-| **MM-701** ✅ | P1 | L | `MiningConfig.java` 全部 `public static final` → 玩家完全无法调整 | `ForgeConfigSpec`（SERVER 类型）+ 运行时快照；改配置即时生效（或明确要求重载）【待核实 ForgeConfigSpec 在本版本的 API】 | 配置文件生成、可改、生效；GameTest 断言配置边界值 |
+| **MM-701** ✅ | P1 | L | `MiningConfig.java` 全部 `public static final` → 玩家完全无法调整 | `ForgeConfigSpec`（1.1.0 定为 COMMON 类型，才能落在 `config/` 并在 Mods 界面编辑）+ 运行时快照；改配置即时生效【待核实 ForgeConfigSpec 在本版本的 API】 | 配置文件生成、可改、生效；GameTest 断言配置边界值 |
 | **MM-702** ✅ | P1 | M | 参数散落在 11 个常量里，语义残缺（如没有危险/物品/安全相关配置） | 配置分组：搜索 / 移动 / 挖掘 / 安全 / 物品 / 性能 / 兼容；每项含注释、默认值、范围 | 配置项 ≥ 35（草案见附录 B） |
 | **MM-703** | P2 | M | 无每女仆配置。**核实补充（附录 D.2）：TLM 已提供挂载点** —— `IMaidTask.getTaskConfigGuiProvider(maid)`（默认返回一个空配置界面）与 `getTaskInfoGuiProvider(maid)` | 支持每女仆覆盖（搜索半径/危险策略/建材白名单），挂到 `getTaskConfigGuiProvider` 提供的界面上；服务器级配置作默认值 | 两只女仆可设置不同挖矿范围；界面可从 TLM 女仆 GUI 进入 |
 | **MM-704** ✅ | P1 | S | 默认值激进（会拆家、会进岩浆、直下挖） | 默认值保守：不挖玩家方块、不进岩浆、不直下、垫脚只用廉价方块、日志仅 WARN+ | 新装 mod 默认配置下不会破坏玩家存档体验 |
+| **MM-1101** ✅ | P1 | M | `MiningValidator.isOre` 把"找什么"写死（矿石标签 + `_ore` 命名），玩家只能调数值、不能改集合（1.1.0 补记） | 目标集合配置化：`targets.mode`（仅矿石 / 仅白名单 / 并集）+ 白/黑名单，支持 `#标签` 与 `mod:*`、`mod:*_ore` 通配；副手从"矿石材料"泛化为"材料或方块"双通道 | 三种模式各有 GameTest；默认 `ORES` 与 1.0.2 行为逐项一致；改配置无需重启（配置重载即失效缓存） |
+| **MM-1102** ✅ | P1 | M | `isPickaxe` 是硬门槛 → 斧头/铲子永远不可用；`ToolManager.tierOf` 只认 `PickaxeItem`，其余一律 0 分（1.1.0 补记） | 工具集合配置化：`tools.whitelist/blacklist/requireCorrectTool`（黑名单优先、白名单非空即取代内置规则）；`ToolManager` 按当前目标重算评分，顺带让 MM-307 的"土用铲"成为可能 | 白名单斧头砍原木且掉落正确（不掉落=未生效）；黑名单优先级与 `requireCorrectTool` 各有 GameTest；默认 `[]` 与 1.0.2 一致 |
 
 ### M8 观测层：日志 / 指令 / 反馈
 
@@ -1141,7 +1143,12 @@ DIG 状态下位置连续 `STALL_TAKEOVER_TICKS`(20) tick 没变，就把最近�
 
 ## 附录 B：配置项草案（MM-701/702）
 
-> `SERVER` 配置；类型/默认值/范围待实现时定稿。默认值列已体现"保守默认"原则（MM-704）。
+> 1.1.0 实现为 `COMMON` 配置（`config/maidmining-common.toml`）；类型/默认值/范围待实现时定稿。默认值列已体现"保守默认"原则（MM-704）。
+>
+> **1.1.0 已落地**：本表的 `search.oreTagWhitelist / blacklist` 与 `dig.useBestToolForBlock`
+> 以 `targets.*`（`mode` / `whitelist` / `blacklist` / `offhandTargeting`）和
+> `tools.*`（`whitelist` / `blacklist` / `requireCorrectTool`）的形式实现，
+> 实际键名与默认值以 `MiningConfigSpec` 为准；下表其余条目仍是草案。
 
 | 键 | 默认 | 说明 |
 |----|------|------|

@@ -52,6 +52,27 @@ final class Defaults {
     static final int TOOL_MIN_DURABILITY = 10;
     static final boolean SCAFFOLD_ENABLED = true;
 
+    // 工具（1.1.0）
+    /**
+     * 默认工具白名单：镐类标签。
+     * <p>
+     * <b>为什么默认不是空</b>：空表示"沿用内置规则"，但玩家一旦往白名单里加东西（哪怕加错了），
+     * 就会整体取代内置规则——实测有人加了一把钻石剑，结果镐子全不能用了。
+     * 默认就把镐写进去，玩家的增删都是在这个基础上"追加/删除"，不会意外丢掉镐。
+     */
+    static final List<String> TOOL_WHITELIST = List.of(
+            "#minecraft:pickaxes",
+            "#forge:tools/pickaxes",
+            "#c:tools/pickaxes");
+    static final List<String> TOOL_BLACKLIST = List.of();
+    static final boolean REQUIRE_CORRECT_TOOL = true;
+
+    // 目标（1.1.0）
+    static final MiningConfigSpec.TargetMode TARGET_MODE = MiningConfigSpec.TargetMode.ORES;
+    static final List<String> TARGET_WHITELIST = List.of();
+    static final List<String> TARGET_BLACKLIST = List.of();
+    static final boolean OFFHAND_TARGETING = true;
+
     // 安全
     static final boolean ALLOW_LAVA = false;
     static final boolean ALLOW_WATER = true;
@@ -59,7 +80,6 @@ final class Defaults {
 
     // 观测
     static final MiningConfigSpec.LogLevel LOG_LEVEL = MiningConfigSpec.LogLevel.WARN;
-    static final boolean SHOW_ACTION_SUMMARY = true;
 
     // 兼容
     static final MiningConfigSpec.CompatMode FAKE_PLAYER_MODE = MiningConfigSpec.CompatMode.MAID;

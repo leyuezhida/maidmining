@@ -19,6 +19,8 @@ import net.minecraft.world.entity.ai.behavior.BehaviorUtils;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.ai.memory.MemoryStatus;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
@@ -63,6 +65,10 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
      * 但 {@code toSearch()} 要用到女仆来清走位目标与导航，所以在这里留一个引用。
      */
     private EntityMaid currentMaid;
+    /** 已经打过"空扫"日志的轮次号，避免每轮都刷。 */
+    private int loggedEmptyPass;
+    /** 是否处于低血撤退状态（只在状态切换时提示一次）。 */
+    private boolean retreating;
 
     public MiningTunnelBehavior() {
         super(Map.<net.minecraft.world.entity.ai.memory.MemoryModuleType<?>, MemoryStatus>of(),
@@ -102,6 +108,11 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
         currentMaid = maid;
         board.tickTimer();
 
+        // 安全优先：低血时停止一切挖掘（safety.minHealthRetreat，此前只有配置没有实现）
+        if (retreatIfHurt(maid)) {
+            return;
+        }
+
         // 无进展看门狗：兜住「顶墙空转」「贴着基岩上爬」这类死循环（MM-306）
         if (board.target() != null && !tickProgressWatchdog(level, maid)) {
             return;
@@ -117,12 +128,10 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
         tickStationaryWatch(level, maid);
 
         if (board.timer() % 20 == 0) {
-            if (!MiningValidator.isPickaxe(maid.getMainHandItem())) {
-                ToolManager.ensureBestPickaxe(maid);
-            } else if (ToolManager.shouldReplaceWorn(maid)) {
-                // 镐快坏了就提前换（仅在开启耐久消耗时有意义）
-                ToolManager.ensureBestPickaxe(maid);
-            }
+            // 按「当前目标」挑工具（MM-1102）：挖沙砾要铲、挖石头要镐。
+            // 没有目标（搜索阶段）时传 null，只按等级/附魔/耐久排序。
+            BlockPos locked = board.target();
+            ToolManager.ensureBestTool(maid, locked == null ? null : level.getBlockState(locked));
         }
         if (board.timer() % 10 == 0) {
             pickupDrops(level, maid);
@@ -187,18 +196,26 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
     // ========== SEARCH ==========
 
     private void searching(ServerLevel level, EntityMaid maid) {
-        if (!MiningValidator.isPickaxe(maid.getMainHandItem())) {
-            ToolManager.ensureBestPickaxe(maid);
-            if (!MiningValidator.isPickaxe(maid.getMainHandItem()) && !board.noPickaxeWarned()) {
+        if (!MiningValidator.isTool(maid.getMainHandItem())) {
+            ToolManager.ensureBestTool(maid);
+            if (!MiningValidator.isTool(maid.getMainHandItem()) && !board.noPickaxeWarned()) {
                 board.markNoPickaxeWarned();
-                MaidMiningMod.LOGGER.warn("[MaidMining] No usable pickaxe in backpack, maid={}", maid.getId());
+                MaidMiningMod.LOGGER.warn("[MaidMining] No usable tool in backpack, maid={} "
+                        + "(check tools.whitelist / tools.blacklist)", maid.getId());
+                // 同时告诉主人一声：否则表现就是"她站着不动"，只能翻日志才看得出来。
+                // 每个会话只提示一次（board.noPickaxeWarned 已经保证）。
+                if (maid.getOwner() instanceof Player owner) {
+                    owner.sendSystemMessage(noToolMessage());
+                }
             }
             return;
         }
 
-        Optional<BlockPos> found = finder.findNearestOre(level, maid, maid.getMainHandItem(),
+        Optional<BlockPos> found = finder.findNearestTarget(level, maid, maid.getMainHandItem(),
                 maid.getOffhandItem(), board.failedTargets());
         if (found.isEmpty()) {
+            warnEmptyScanOnce(level, maid);
+            followOwnerIfIdle(maid);
             return;
         }
         BlockPos candidate = found.get();
@@ -207,7 +224,7 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
         if (MiningConfig.skipNearBedrock() && MiningValidator.isNearBedrock(level, candidate)) {
             board.failedTargets().add(candidate);
             board.countSkippedNearBedrock();
-            MaidMiningMod.LOGGER.info("[MaidMining] Skipped bedrock-near ore ({},{},{}) maid={}",
+            MaidMiningMod.LOGGER.info("[MaidMining] Skipped bedrock-near target ({},{},{}) maid={}",
                     candidate.getX(), candidate.getY(), candidate.getZ(), maid.getId());
             return;
         }
@@ -217,9 +234,147 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
 
         if (MiningConfig.logInfoEnabled()) {
             String targetName = MiningValidator.targetOreName(maid.getOffhandItem());
-            MaidMiningMod.LOGGER.info("[MaidMining] Locked ore ({},{},{}) target={} maid={}",
+            MaidMiningMod.LOGGER.info("[MaidMining] Locked target ({},{},{}) block={} filter={} maid={}",
                     candidate.getX(), candidate.getY(), candidate.getZ(),
+                    String.valueOf(ForgeRegistries.BLOCKS.getKey(level.getBlockState(candidate).getBlock())),
                     targetName == null ? "all" : targetName, maid.getId());
+        }
+    }
+
+    /**
+     * "没有可用工具"的提示文案。
+     * <p>
+     * 白名单非空时<b>取代</b>内置的"任何镐子"规则，所以最常见的原因是白名单里只有别的东西
+     * （实测：玩家把一把钻石剑写进了白名单，然后奇怪下界合金镐为什么不能用）。
+     * 这条消息直接把当前白名单内容说出来，省得再去翻配置。
+     */
+    private static Component noToolMessage() {
+        MiningConfig.ToolRules rules = MiningConfig.currentToolRules();
+        if (rules.whitelistConfigured() && !rules.whitelist().isEmpty()) {
+            String allowed = rules.whitelist().stream()
+                    .map(item -> String.valueOf(ForgeRegistries.ITEMS.getKey(item)))
+                    .sorted()
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("");
+            return Component.translatable("maidmining.msg.no_pickaxe_listed", allowed);
+        }
+        return Component.translatable("maidmining.msg.no_pickaxe");
+    }
+
+    /**
+     * 低血撤退：血量 ≤ {@code safety.minHealthRetreat} 时停止挖掘，并往主人那边靠。
+     * <p>
+     * <b>自查发现</b>：这个配置项此前只有声明、没有实现——玩家把阈值调高以为有保护，
+     * 实际上她照样往岩浆里挖。{@code 0} 表示关闭撤退。
+     *
+     * @return true 表示本 tick 已被撤退逻辑接管，不再推进状态机
+     */
+    private boolean retreatIfHurt(EntityMaid maid) {
+        float threshold = MiningConfig.minHealthRetreat();
+        if (threshold <= 0.0F || maid.getHealth() > threshold) {
+            this.retreating = false;
+            return false;
+        }
+        mover.end();
+        board.backToSearch();
+        finder.reset();
+        if (!this.retreating) {
+            this.retreating = true;
+            MaidMiningMod.LOGGER.info("[MaidMining] Retreat: health={} <= {} maid={}",
+                    maid.getHealth(), threshold, maid.getId());
+            if (maid.getOwner() instanceof Player owner) {
+                owner.sendSystemMessage(Component.translatable("maidmining.msg.low_health"));
+            }
+        }
+        LivingEntity owner = maid.getOwner();
+        if (owner != null && maid.distanceTo(owner) > 4.0F) {
+            maid.getNavigation().moveTo(owner, MiningConfig.moveSpeed());
+        }
+        return true;
+    }
+
+    /**
+     * 空闲时跟随主人（{@code travel.followOwnerWhenIdle}）。
+     * <p>
+     * 同样属于"只有配置没有实现"的一项。只在<b>离得很远</b>（超过 12 格）且每 20 tick
+     * 检查一次时才重新下发走位目标，避免和搜索/挖掘抢移动控制。
+     */
+    private void followOwnerIfIdle(EntityMaid maid) {
+        if (!MiningConfig.followOwnerWhenIdle()) {
+            return;
+        }
+        LivingEntity owner = maid.getOwner();
+        if (owner == null) {
+            return;
+        }
+        if (maid.distanceTo(owner) < 12.0F || board.timer() % 20 != 0) {
+            return;
+        }
+        maid.getNavigation().moveTo(owner, MiningConfig.moveSpeed());
+    }
+
+    /**
+     * 整轮扫描没找到任何目标时，把<b>当时的判定条件</b>打出来。
+     * <p>
+     * 没有这行日志，"女仆不挖"只能靠猜：目标没配进去、工具不对、副手把目标限死了，
+     * 三种情况在游戏里表现一模一样（1.1.0 实测就卡在这里）。每个会话只在第一轮空扫时
+     * 打 WARN，后续轮次降到 INFO，避免刷屏。
+     */
+    private void warnEmptyScanOnce(ServerLevel level, EntityMaid maid) {
+        int passes = finder.emptyPasses();
+        if (passes <= this.loggedEmptyPass) {
+            return;
+        }
+        this.loggedEmptyPass = passes;
+
+        // 近距离探针：区分"根本没认成目标"与"认出来了但挖不动"，
+        // 这两类问题在游戏里表现完全一样（女仆站着不动）。
+        int nearbyTargets = 0;
+        int nearbyBreakable = 0;
+        BlockPos center = maid.blockPosition();
+        for (int dx = -4; dx <= 4; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    BlockPos pos = center.offset(dx, dy, dz);
+                    if (!level.hasChunkAt(pos)) {
+                        continue;
+                    }
+                    BlockState state = level.getBlockState(pos);
+                    if (!MiningValidator.isTarget(state)) {
+                        continue;
+                    }
+                    nearbyTargets++;
+                    if (MiningValidator.isTargetBreakable(level, pos, maid.getMainHandItem(),
+                            maid.getOffhandItem())) {
+                        nearbyBreakable++;
+                    }
+                }
+            }
+        }
+
+        String message = "No target found after a full scan (pass #{}) mode={} whitelist={} blacklist={} "
+                + "tool={} offhand={} maid={} restrict=[has={} center={} radius={} within={}] "
+                + "nearbyTargets={} nearbyBreakable={} excluded={}";
+        Object[] args = {
+                passes,
+                MiningConfig.currentTargetRules().mode(),
+                MiningConfig.currentTargetRules().whitelist(),
+                MiningConfig.currentTargetRules().blacklist(),
+                ForgeRegistries.ITEMS.getKey(maid.getMainHandItem().getItem()),
+                ForgeRegistries.ITEMS.getKey(maid.getOffhandItem().getItem()),
+                center,
+                maid.hasRestriction(),
+                maid.hasRestriction() ? maid.getRestrictCenter() : "-",
+                maid.hasRestriction() ? maid.getRestrictRadius() : "-",
+                maid.hasRestriction() && maid.isWithinRestriction(center),
+                nearbyTargets,
+                nearbyBreakable,
+                board.failedTargets().size()
+        };
+        if (passes == 1) {
+            MaidMiningMod.LOGGER.warn("[MaidMining] " + message, args);
+        } else if (MiningConfig.logInfoEnabled()) {
+            MaidMiningMod.LOGGER.info("[MaidMining] " + message, args);
         }
     }
 
@@ -227,7 +382,7 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
 
     private void digging(ServerLevel level, EntityMaid maid) {
         BlockPos target = board.target();
-        if (target == null || !MiningValidator.isOreBreakable(level, target,
+        if (target == null || !MiningValidator.isTargetBreakable(level, target,
                 maid.getMainHandItem(), maid.getOffhandItem())) {
             if (target != null && MiningConfig.logDebugEnabled()) {
                 BlockState state = level.getBlockState(target);
@@ -263,7 +418,7 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
             toSearch();
             return;
         }
-        if (MiningValidator.isOreBreakable(level, target, maid.getMainHandItem(), maid.getOffhandItem())
+        if (MiningValidator.isTargetBreakable(level, target, maid.getMainHandItem(), maid.getOffhandItem())
                 && isAdjacent(maid, target)) {
             BreakResult result = DigExecutor.dig(level, maid, target);
             if (result == BreakResult.SUCCESS) {
@@ -445,11 +600,27 @@ public class MiningTunnelBehavior extends Behavior<EntityMaid> implements Tunnel
     }
 
     private boolean isAdjacent(EntityMaid maid, BlockPos pos) {
-        BlockPos feet = maid.blockPosition();
-        int reach = MiningConfig.adjacentDist();
-        return Math.abs(pos.getX() - feet.getX()) <= reach
-                && Math.abs(pos.getY() - feet.getY()) <= reach
-                && Math.abs(pos.getZ() - feet.getZ()) <= reach;
+        return isWithinReach(maid.blockPosition(), pos, MiningConfig.adjacentDist());
+    }
+
+    /**
+     * 女仆站在 {@code feet} 时能否直接挖到 {@code pos}。
+     * <p>
+     * 除了三轴都在 {@code reach} 内，额外允许<b>正上方多一格</b>：
+     * 玩家站在下面本来就挖得到头顶 2 格的方块。1.1.0 实测里，头顶的目标因为
+     * "不相邻"只能走去起塔，而手里没有垫脚建材时会一直卡到放弃目标
+     * （日志：{@code Ascend failed dy=2 hDist=0 -> cannot ascend}）。
+     * <p>
+     * 下方不放开：向下够到会让她悬空后掉落，属于另一套下降逻辑，别在这里顺手改。
+     */
+    public static boolean isWithinReach(BlockPos feet, BlockPos pos, int reach) {
+        int dx = Math.abs(pos.getX() - feet.getX());
+        int dy = pos.getY() - feet.getY();
+        int dz = Math.abs(pos.getZ() - feet.getZ());
+        if (dx <= reach && dz <= reach && Math.abs(dy) <= reach) {
+            return true;
+        }
+        return dx == 0 && dz == 0 && dy > 0 && dy <= reach + 1;
     }
 
     /** 供 i18n 提示使用的"当前在做什么"。 */

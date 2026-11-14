@@ -2,12 +2,14 @@ package com.leyue.maidmining.mining;
 
 import com.leyue.maidmining.MaidMiningMod;
 import com.leyue.maidmining.cfg.MiningConfig;
+import com.leyue.maidmining.cfg.MiningConfigSpec;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
@@ -24,12 +26,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 目标方块的校验规则：
- * 1. 必须是矿石；
- * 2. 必须能被当前手持镐子（挖掘等级）正确破坏。
+ * 目标方块与工具的校验规则。
  * <p>
- * 注意：某些环境下 {@code #minecraft:ores} 标签可能无法命中，
- * 因此矿石识别采用「标签优先 + 方块注册名兜底」的双保险策略。
+ * <b>1.1.0 的变化（MM-1101 / MM-1102）</b>：1.0.x 把"什么是矿石"和"什么是镐子"
+ * 都写死在这里，玩家只能改数值、不能改集合。现在这两件事都先问配置
+ * （{@link MiningConfig}），配置没写时才退回内置规则，因此：
+ * <ul>
+ *   <li><b>工具</b>：{@code tools.whitelist} 可以列任意物品（铲子、模组工具…），
+ *       黑名单优先级最高；留空则沿用"任何镐子"的老判定；</li>
+ *   <li><b>目标</b>：{@code targets.mode} 三档（仅矿石 / 仅白名单 / 两者并集），
+ *       外加黑名单兜底；默认 {@code ORES} 与 1.0.2 完全等价；</li>
+ *   <li><b>副手</b>：除了原来的"矿石材料名"匹配，现在还支持"放什么方块就挖什么方块"。</li>
+ * </ul>
+ * <p>
+ * <b>为什么矿石识别仍保留双保险</b>：某些环境下 {@code #minecraft:ores} 标签可能无法命中，
+ * 因此采用「标签优先 + 方块注册名兜底」的策略，见 {@link #looksLikeOre}。
  */
 public final class MiningValidator {
     /** 矿石方块标签，覆盖原版 + Forge + Fabric 三方矿石。 */
@@ -42,7 +53,7 @@ public final class MiningValidator {
      * <p>
      * 已核实：原版 {@code minecraft:pickaxes} 只列了 6 把原版镐；Forge 1.20.1 也不提供统一的镐标签。
      * mod 镐的识别主要靠 {@link ToolActions#PICKAXE_DIG} 与"能否正确开采石头"兜底
-     * （见 {@link #isPickaxe}）。这两个额外标签是给遵循该约定的 mod 留的入口，不存在也不会报错。
+     * （见 {@link #isBuiltinPickaxe}）。这两个额外标签是给遵循该约定的 mod 留的入口，不存在也不会报错。
      */
     public static final TagKey<Item> FORGE_PICKAXES_TAG =
             TagKey.create(Registries.ITEM, oreTag("forge", "tools/pickaxes"));
@@ -89,8 +100,19 @@ public final class MiningValidator {
 
     // 副手解析缓存：扫描热路径里也会反复问同一个副手物品
     private static ItemStack cachedOffhand = ItemStack.EMPTY;
-    private static String cachedMaterial;
+    private static OffhandTarget cachedTarget;
     private static boolean cachedValid;
+
+    /**
+     * 副手指定的目标。两个字段互斥地生效：
+     * <ul>
+     *   <li>{@code material} 非空 → 按矿石材料名匹配（1.0.x 的语义，放原矿/锭/宝石）；</li>
+     *   <li>{@code block} 非空 → 按方块精确匹配（1.1.0 新增，放沙砾就只挖沙砾）；</li>
+     *   <li>两者都空 → 无法识别，按"不限制"处理。</li>
+     * </ul>
+     */
+    private record OffhandTarget(String material, Block block) {
+    }
 
     /** 目标站立点周围需要检测的偏移（覆盖脚下、头顶、四周墙壁与地板矿石）。 */
     private static final BlockPos[] NEARBY_OFFSETS = {
@@ -102,8 +124,10 @@ public final class MiningValidator {
     private MiningValidator() {
     }
 
+    // ==================== 目标方块 ====================
+
     /**
-     * 是否为矿石方块。
+     * 是否为矿石方块（<b>内置规则</b>，不看配置）。
      * <p>
      * 判定顺序：{@code minecraft:ores} / {@code forge:ores} / {@code c:ores} 三大标签 →
      * <b>任意 {@code <ns>:ores/<材料>} 子标签</b>（这是 mod 矿石的主力来源：镍、铝、铅、锡…
@@ -115,6 +139,37 @@ public final class MiningValidator {
         return oreBlockSet().contains(state.getBlock());
     }
 
+    /**
+     * 是否是女仆该去找的目标方块（1.1.0，配置驱动）。
+     * <p>
+     * 判定顺序：<b>黑名单</b>（最高优先级，连矿石标签也压得住）→ 白名单（仅非 {@code ORES} 模式）
+     * → 矿石集合（仅非 {@code WHITELIST} 模式）。
+     * <p>
+     * 这样写的好处是默认配置（{@code mode=ORES}、两个名单都空）下只剩
+     * 「黑名单查空集 + 矿石集合查表」两次哈希，与 1.0.2 的开销基本一致。
+     */
+    public static boolean isTarget(BlockState state) {
+        return isTarget(state, MiningConfig.currentTargetRules());
+    }
+
+    /**
+     * 用<b>显式规则</b>判定目标（测试与诊断用）。
+     * <p>
+     * 把规则作为参数而不是每次都读全局配置，是为了让 GameTest 能直接构造
+     * "只挖沙砾"这类规则去验证每种模式 —— GameTest 并行执行，改写全局
+     * {@code ForgeConfigSpec} 会干扰其他用例。
+     */
+    public static boolean isTarget(BlockState state, MiningConfig.TargetRules rules) {
+        Block block = state.getBlock();
+        if (rules.blacklist().contains(block)) {
+            return false;
+        }
+        if (rules.mode() != MiningConfigSpec.TargetMode.ORES && rules.whitelist().contains(block)) {
+            return true;
+        }
+        return rules.mode() != MiningConfigSpec.TargetMode.WHITELIST && isOre(state);
+    }
+
     /** 标签更新（数据包重载）后调用：清掉矿石与副手缓存，下一次访问时重建。 */
     public static synchronized void invalidateCaches() {
         oreBlocks = null;
@@ -122,6 +177,7 @@ public final class MiningValidator {
         oreMaterials = null;
         cachedValid = false;
         cachedOffhand = ItemStack.EMPTY;
+        cachedTarget = null;
     }
 
     private static Set<Block> oreBlockSet() {
@@ -197,15 +253,50 @@ public final class MiningValidator {
         return null;
     }
 
+    // ==================== 工具 ====================
+
     /**
-     * 手持物品是否为镐子。
+     * 这个物品能不能当工具用（1.1.0，配置驱动）。
+     * <p>
+     * 判定顺序：<b>黑名单</b> → 白名单（写过就只认白名单）→ 内置镐子规则。
+     * 因此：
+     * <ul>
+     *   <li>不配置任何东西 → 与 1.0.2 完全一致（任何镐子都可以）；</li>
+     *   <li>{@code tools.whitelist = ["minecraft:iron_axe"]} → 背包里的镐子不再被拿起；</li>
+     *   <li>白名单写 {@code #minecraft:pickaxes} 再补几个 mod 工具 → 两者都认。</li>
+     * </ul>
+     */
+    public static boolean isTool(ItemStack stack) {
+        return isTool(stack, MiningConfig.currentToolRules());
+    }
+
+    /**
+     * 用<b>显式规则</b>判定工具（测试与诊断用）。语义同 {@link #isTool(ItemStack)}，
+     * 只是规则由调用方给，不读全局配置。
+     */
+    public static boolean isTool(ItemStack stack, MiningConfig.ToolRules rules) {
+        if (stack.isEmpty()) {
+            return false;
+        }
+        if (rules.blacklist().contains(stack.getItem())) {
+            return false;
+        }
+        if (rules.whitelistConfigured()) {
+            // 白名单里有镐类标签时，仍保留"任何镐"的兜底识别（覆盖没打标签的模组镐）
+            return rules.whitelist().contains(stack.getItem())
+                    || (rules.acceptAnyPickaxe() && isBuiltinPickaxe(stack));
+        }
+        return isBuiltinPickaxe(stack);
+    }
+
+    /**
+     * 内置"是不是镐子"的判定。
      * <p>
      * 依次判定：{@code #minecraft:pickaxes}（原版 6 把）→ {@code forge/c:tools/pickaxes} →
      * {@link ToolActions#PICKAXE_DIG}（mod 镐的主力：任何继承 {@code DiggerItem} 的工具都会命中）→
      * **能正确开采石头**（覆盖既没进标签、也没实现 ToolActions 的自定义工具）。
-     * 这样"所有带镐标签的工具"以及"行为上就是镐的工具"都能用。
      */
-    public static boolean isPickaxe(ItemStack tool) {
+    private static boolean isBuiltinPickaxe(ItemStack tool) {
         if (tool.isEmpty()) {
             return false;
         }
@@ -219,33 +310,88 @@ public final class MiningValidator {
     }
 
     /**
+     * 旧名字，保留给外部调用（例如附属模组或旧测试）。
+     *
+     * @deprecated 1.1.0 起工具集合由配置决定，请用 {@link #isTool(ItemStack)}。
+     *         注意本方法<b>只看内置规则、不看配置</b>，语义是"这是不是一把镐"。
+     */
+    @Deprecated
+    public static boolean isPickaxe(ItemStack tool) {
+        return isBuiltinPickaxe(tool);
+    }
+
+    /**
      * 当前工具能否正确破坏该方块。
-     * 内部会校验：方块可用镐子挖掘，且镐子的挖掘等级 ≥ 方块要求等级
-     * （即石镐挖不了钻石矿、木镐挖不了铁矿这类规则）。
+     * <p>
+     * 1.0.x 这里有一道 {@code isPickaxe} 硬门槛，导致铲子等非镐工具永远通不过。
+     * 1.1.0 改为：<b>先过工具名单</b>，再按 {@code requireCorrectTool} 决定是否要求
+     * "正确工具 + 足够挖掘等级"（石镐挖不动钻石矿这条规则在这个开关为 ON 时依然生效）。
      */
     public static boolean canBreak(BlockState state, ItemStack tool) {
+        return canBreak(state, tool, MiningConfig.currentToolRules());
+    }
+
+    /**
+     * 用<b>显式规则</b>判定"当前工具能否正确破坏该方块"（测试与诊断用）。
+     *
+     * @param rules 工具规则；{@code requireCorrect} 决定是否强制"正确工具 + 足够等级"
+     */
+    public static boolean canBreak(BlockState state, ItemStack tool, MiningConfig.ToolRules rules) {
         if (state.isAir()) {
             return false;
         }
-        if (!isPickaxe(tool)) {
+        if (!isTool(tool, rules)) {
             return false;
+        }
+        if (!rules.requireCorrect()) {
+            return true;
+        }
+        // 方块本身不要求"正确工具"时（刷怪笼、玻璃、树叶…），原版规则是"拿什么都能挖"，
+        // 只是掉落由战利品表决定（多数需要精准采集）。这里不能再用工具类型把它挡掉，
+        // 否则把刷怪笼加进目标名单会完全无效（1.1.0 实测反馈）。
+        if (!state.requiresCorrectToolForDrops()) {
+            return true;
         }
         return tool.isCorrectToolForDrops(state);
     }
 
-    /** 指定位置是否为「可挖的矿石」（不限定类型）。 */
-    public static boolean isOreBreakable(ServerLevel level, BlockPos pos, ItemStack tool) {
-        return isOreBreakable(level, pos, tool, ItemStack.EMPTY);
+    // ==================== 可挖判定 ====================
+
+    /** 指定位置是否为「可挖的目标」（不限定类型、不限定副手）。 */
+    public static boolean isTargetBreakable(ServerLevel level, BlockPos pos, ItemStack tool) {
+        return isTargetBreakable(level, pos, tool, ItemStack.EMPTY);
     }
 
     /**
-     * 指定位置是否为「可挖的矿石」。
-     * 若副手指定了原矿石，则只匹配对应类型的矿石（如副手放粗铁/铁矿石 → 只挖铁矿）。
+     * 指定位置是否为「可挖的目标」。
+     * <p>
+     * 三个条件同时成立：是目标方块（{@code targets.*}）→ 符合副手指定（{@code isTargetedBy}）
+     * → 当前工具挖得动（{@code canBreak}）。
      */
-    public static boolean isOreBreakable(ServerLevel level, BlockPos pos, ItemStack tool, ItemStack offhand) {
-        BlockState state = level.getBlockState(pos);
-        return isOre(state) && isTargetedOre(state, offhand) && canBreak(state, tool);
+    public static boolean isTargetBreakable(ServerLevel level, BlockPos pos, ItemStack tool, ItemStack offhand) {
+        return isTargetBreakable(level, pos, tool, offhand,
+                MiningConfig.currentTargetRules(), MiningConfig.currentToolRules());
     }
+
+    /**
+     * 用显式规则判定"这个位置可挖"（测试用）。
+     * <p>
+     * <b>白名单优先于副手</b>：玩家显式写进 {@code targets.whitelist} 的方块不会被副手过滤掉。
+     * 副手往往只是之前测试留在那的东西（1.1.0 实测：副手放着刷怪笼，之后把制箭台加进白名单，
+     * 她死活不挖），而白名单才是明确意图。副手仍然会在"只挖矿"模式下筛选矿种。
+     */
+    public static boolean isTargetBreakable(ServerLevel level, BlockPos pos, ItemStack tool, ItemStack offhand,
+                                            MiningConfig.TargetRules targets, MiningConfig.ToolRules tools) {
+        BlockState state = level.getBlockState(pos);
+        if (!isTarget(state, targets) || !canBreak(state, tool, tools)) {
+            return false;
+        }
+        boolean explicit = targets.mode() != MiningConfigSpec.TargetMode.ORES
+                && targets.whitelist().contains(state.getBlock());
+        return explicit || isTargetedBy(state, offhand);
+    }
+
+    // ==================== 副手过滤 ====================
 
     /**
      * 副手物品 → 目标矿石材料名（如 "iron"、"nickel"、"diamond"）；null = 未指定或无法识别。
@@ -261,20 +407,43 @@ public final class MiningValidator {
      *       {@code quartz→nether_quartz}、{@code amethyst_shard→amethyst}</li>
      *   <li>兜底：物品名本身就是材料名（{@code diamond} / {@code coal} / {@code redstone}）</li>
      * </ol>
-     * 解析结果与「世界里真实存在的矿石材料」核对；核对失败时**明确告警**并按"挖全部"处理。
+     * 解析结果与「世界里真实存在的矿石材料」核对；核对失败返回 null，
+     * 由 {@link #offhandTarget} 决定是否退化为"按方块匹配"。
      */
     public static String targetOreName(ItemStack offhand) {
         if (offhand.isEmpty()) {
             return null;
         }
+        return offhandTarget(offhand).material();
+    }
+
+    private static OffhandTarget offhandTarget(ItemStack offhand) {
         if (cachedValid && ItemStack.matches(cachedOffhand, offhand)) {
-            return cachedMaterial;
+            return cachedTarget;
         }
-        String resolved = resolveTargetMaterial(offhand);
+        String material = resolveTargetMaterial(offhand);
+        Block block = blockOf(offhand);
+        if (material == null && block == null) {
+            warnUnresolvableOffhand(offhand);
+        }
         cachedOffhand = offhand.copy();
-        cachedMaterial = resolved;
+        cachedTarget = new OffhandTarget(material, block);
         cachedValid = true;
-        return resolved;
+        return cachedTarget;
+    }
+
+    private static Block blockOf(ItemStack stack) {
+        return stack.getItem() instanceof BlockItem blockItem ? blockItem.getBlock() : null;
+    }
+
+    private static void warnUnresolvableOffhand(ItemStack offhand) {
+        ResourceLocation key = ForgeRegistries.ITEMS.getKey(offhand.getItem());
+        if (key == null || !WARNED_OFFHAND.add(key.getPath())) {
+            return;
+        }
+        MaidMiningMod.LOGGER.warn(
+                "[MaidMining] Offhand item {} is neither an ore material nor a placeable block; "
+                        + "it will not narrow the target", key);
     }
 
     private static String resolveTargetMaterial(ItemStack offhand) {
@@ -295,10 +464,6 @@ public final class MiningValidator {
             if (candidate != null && known.contains(candidate)) {
                 return candidate;
             }
-        }
-        if (WARNED_OFFHAND.add(path)) {
-            MaidMiningMod.LOGGER.warn(
-                    "[MaidMining] Offhand item {} can't be matched to any known ore material; mining all ores", key);
         }
         return null;
     }
@@ -354,31 +519,55 @@ public final class MiningValidator {
         return oreMaterials;
     }
 
-    /** 该方块是否属于副手指定的矿石类型（副手未指定/无法识别时匹配所有矿石）。 */
-    public static boolean isTargetedOre(BlockState state, ItemStack offhand) {
-        String target = targetOreName(offhand);
-        if (target == null) {
+    /**
+     * 该方块是否符合副手的指定（1.1.0 起有两条通道）。
+     * <p>
+     * 1. <b>材料通道</b>：副手能解析出矿石材料（粗铁/铁矿/铁锭…）→ 只匹配同材料的矿石。
+     *    这是 1.0.x 的行为，保持不变；放铁矿仍然覆盖深板岩铁矿。
+     * 2. <b>方块通道</b>：副手是方块物品（沙砾/黏土/石头…）→ 只匹配该方块本身。
+     * 3. 两条都不成立（木棍、食物…）→ <b>不限制</b>。这一点是刻意的：
+     *    认不出来的东西不能把目标全排除，否则女仆会站着不动。
+     */
+    public static boolean isTargetedBy(BlockState state, ItemStack offhand) {
+        if (offhand.isEmpty() || !MiningConfig.offhandTargeting()) {
             return true;
         }
-        return target.equals(oreMaterialOf(state));
+        OffhandTarget target = offhandTarget(offhand);
+        if (target.material() != null) {
+            return target.material().equals(oreMaterialOf(state));
+        }
+        if (target.block() != null) {
+            return target.block() == state.getBlock();
+        }
+        return true;
     }
 
-    /** 目标站立点周围是否存在可挖的矿石。 */
-    public static boolean hasOreNear(ServerLevel level, BlockPos standPos, ItemStack tool) {
+    /**
+     * 旧名字，保留给外部调用与旧测试。
+     *
+     * @deprecated 1.1.0 起副手还能按方块匹配，请用 {@link #isTargetedBy(BlockState, ItemStack)}。
+     */
+    @Deprecated
+    public static boolean isTargetedOre(BlockState state, ItemStack offhand) {
+        return isTargetedBy(state, offhand);
+    }
+
+    /** 目标站立点周围是否存在可挖的目标。 */
+    public static boolean hasTargetNear(ServerLevel level, BlockPos standPos, ItemStack tool) {
         for (BlockPos offset : NEARBY_OFFSETS) {
-            if (isOreBreakable(level, standPos.offset(offset), tool)) {
+            if (isTargetBreakable(level, standPos.offset(offset), tool)) {
                 return true;
             }
         }
         return false;
     }
 
-    /** 返回目标站立点周围全部可挖矿石的位置。 */
-    public static List<BlockPos> orePositionsNear(ServerLevel level, BlockPos standPos, ItemStack tool) {
+    /** 返回目标站立点周围全部可挖目标的位置。 */
+    public static List<BlockPos> targetPositionsNear(ServerLevel level, BlockPos standPos, ItemStack tool) {
         List<BlockPos> result = new ArrayList<>();
         for (BlockPos offset : NEARBY_OFFSETS) {
             BlockPos pos = standPos.offset(offset);
-            if (isOreBreakable(level, pos, tool)) {
+            if (isTargetBreakable(level, pos, tool)) {
                 result.add(pos);
             }
         }

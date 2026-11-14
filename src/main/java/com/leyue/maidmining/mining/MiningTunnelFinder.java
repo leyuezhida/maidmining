@@ -15,7 +15,10 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 目标搜索器：以女仆为中心，在配置半径内寻找最近的、可挖的矿石方块（包括埋在地下的）。
+ * 目标搜索器：以女仆为中心，在配置半径内寻找最近的、可挖的目标方块（包括埋在地下的）。
+ * <p>
+ * 「目标」的判定在 {@link MiningValidator#isTarget}，由 {@code targets.*} 配置决定；
+ * 默认仍是矿石，与 1.0.2 等价。
  * <p>
  * 与露天搜索不同，这里不做"可达性"过滤 —— 找到的矿即使被岩石埋住，
  * 也会交给隧道挖掘行为去挖开一条巷道抵达。
@@ -50,6 +53,8 @@ public class MiningTunnelFinder {
     private int emptyPasses;
     /** 因未加载而跳过的段数（MM-805 计数器；>0 说明前置检查确实在起作用）。 */
     private int skippedUnloadedSegments;
+    /** 最近一次见到的配置代数；变化时说明玩家改过工具/目标，需要重头扫。 */
+    private int seenConfigGeneration = -1;
 
     /** 复用的可变坐标：避免每格分配新 BlockPos。 */
     private final BlockPos.MutableBlockPos cursorPos = new BlockPos.MutableBlockPos();
@@ -67,12 +72,26 @@ public class MiningTunnelFinder {
     }
 
     /**
-     * 每 tick 调用一次。找到最近的矿石返回其坐标，否则返回空。
+     * 每 tick 调用一次。找到最近的目标方块返回其坐标，否则返回空。
      * <p>
      * {@code exclude} 为要跳过的位置（挖不到的目标）。
+     * <p>
+     * 方法名在 1.1.0 从 {@code findNearestOre} 改为 {@code findNearestTarget}：
+     * 目标不再限于矿石（见 {@code targets.mode}），叫 ore 会误导。
      */
-    public Optional<BlockPos> findNearestOre(ServerLevel level, EntityMaid maid, ItemStack tool,
-                                             ItemStack offhand, Set<BlockPos> exclude) {
+    public Optional<BlockPos> findNearestTarget(ServerLevel level, EntityMaid maid, ItemStack tool,
+                                                ItemStack offhand, Set<BlockPos> exclude) {
+        // 玩家刚改过配置（工具/目标名单）：之前的扫描结果不再作数。
+        // 必须把游标打回起点并清掉退避，否则近处那一列在改动前已被扫过，
+        // 要等一整轮扫描（半径 48 时约 73 秒）加最长 30 秒退避才会回头看它。
+        int generation = MiningConfig.configGeneration();
+        if (generation != this.seenConfigGeneration) {
+            this.seenConfigGeneration = generation;
+            this.cursor = 0;
+            this.cooldown = 0;
+            this.emptyPasses = 0;
+        }
+
         if (cooldown > 0) {
             cooldown--;
             return Optional.empty();
@@ -134,32 +153,52 @@ public class MiningTunnelFinder {
                                   int yTop, int yBottom, Set<BlockPos> exclude,
                                   ItemStack tool, ItemStack offhand) {
         LevelChunkSection[] sections = chunk.getSections();
-        int minSection = Math.max(0, yBottom >> 4);
-        int maxSection = Math.min(sections.length - 1, yTop >> 4);
+        // 1.18+ 的世界最低点是 y=-64，段落下标必须减去 minSection，不能直接用 y>>4：
+        // 否则地下（y<0）会算出负数下标，循环一次都不执行 —— 表现就是"整轮扫描什么都没找到"，
+        // 而实际上目标就在她旁边（1.1.0 实测：女仆在 y=-60，旁边就有可挖目标）。
+        int minSectionCoord = level.getMinSection();
+        int minIndex = Math.max(0, sectionIndexFor(yBottom, minSectionCoord));
+        int maxIndex = Math.min(sections.length - 1, sectionIndexFor(yTop, minSectionCoord));
 
-        for (int sectionIndex = maxSection; sectionIndex >= minSection; sectionIndex--) {
-            LevelChunkSection section = sections[sectionIndex];
+        for (int index = maxIndex; index >= minIndex; index--) {
+            LevelChunkSection section = sections[index];
             if (section == null || section.hasOnlyAir()) {
                 continue;
             }
             // maybeHas 走调色板：false ⇒ 该段确定没有匹配方块（true 只是"可能有"）
-            if (!section.maybeHas(state -> MiningValidator.isOre(state))) {
+            if (!section.maybeHas(state -> MiningValidator.isTarget(state))) {
                 continue;
             }
-            int segTop = Math.min(yTop, (sectionIndex << 4) + 15);
-            int segBottom = Math.max(yBottom, sectionIndex << 4);
+            int sectionCoord = index + minSectionCoord;
+            int segTop = Math.min(yTop, (sectionCoord << 4) + 15);
+            int segBottom = Math.max(yBottom, sectionCoord << 4);
             for (int y = segTop; y >= segBottom; y--) {
                 cursorPos.set(x, y, z);
                 if (exclude.contains(cursorPos)) {
                     continue;
                 }
-                if (MiningValidator.isOreBreakable(level, cursorPos, tool, offhand)) {
+                if (MiningValidator.isTargetBreakable(level, cursorPos, tool, offhand)) {
                     result = cursorPos.immutable();
                     return result;
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * 方块 Y → 区块段数组下标。
+     * <p>
+     * {@code LevelChunk#getSections()} 的 0 号元素对应 {@code minBuildHeight} 所在段
+     * （1.20.1 主世界是 -64 ⇒ 段坐标 -4），所以必须减去 {@code minSection}。
+     * 直接用 {@code y >> 4} 是 1.16 及以前的写法，在 1.18+ 会整体偏移 4 段，
+     * 地下还会变成负数下标。
+     *
+     * @param blockY          方块 Y
+     * @param minSectionCoord 世界最低段坐标（{@code level.getMinSection()}）
+     */
+    public static int sectionIndexFor(int blockY, int minSectionCoord) {
+        return (blockY >> 4) - minSectionCoord;
     }
 
     /** 冷却策略：连续空扫时指数退避（MM-105），上限由配置决定。 */

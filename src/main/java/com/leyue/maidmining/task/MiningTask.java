@@ -51,25 +51,26 @@ public class MiningTask implements IMaidTask {
     }
 
     /**
-     * 启用条件（MM-903）。
+     * 启用条件（MM-903 / MM-1102）。
      * <p>
-     * TLM 会为每个条件生成文案键 {@code task.<ns>.<path>.condition.<name>}，
-     * 这里正好把 1.0.x 就写下但一直没被引用的 {@code ...condition.pickaxe} 键接上。
+     * TLM 会为每个条件生成文案键 {@code task.<ns>.<path>.condition.<name>}。
+     * 1.1.0 起工具集合由配置决定，不再只限镐子，所以条件名从 {@code pickaxe}
+     * 改成 {@code tool}，文案也相应泛化为"需要工具"。
      */
     @Override
     public List<Pair<String, Predicate<EntityMaid>>> getEnableConditionDesc(EntityMaid maid) {
         return Lists.newArrayList(
-                Pair.of("pickaxe", m -> MiningValidator.isPickaxe(m.getMainHandItem())
-                        || hasPickaxeInBackpack(m)));
+                Pair.of("tool", m -> MiningValidator.isTool(m.getMainHandItem())
+                        || hasToolInBackpack(m)));
     }
 
-    private static boolean hasPickaxeInBackpack(EntityMaid maid) {
+    private static boolean hasToolInBackpack(EntityMaid maid) {
         var inv = maid.getMaidInv();
         for (int slot = 0; slot < inv.getSlots(); slot++) {
             if (slot == MaidInventory.DISPLAY_SLOT) {
                 continue;
             }
-            if (MiningValidator.isPickaxe(inv.getStackInSlot(slot))) {
+            if (MiningValidator.isTool(inv.getStackInSlot(slot))) {
                 return true;
             }
         }

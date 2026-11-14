@@ -1,13 +1,10 @@
 package com.leyue.maidmining.cfg;
 
-import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.tags.TagKey;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -18,9 +15,14 @@ import java.util.Set;
  * 现在常量定义搬去了 {@link MiningConfigSpec}（{@link net.minecraftforge.common.ForgeConfigSpec}），
  * 这里只负责<b>把配置读成业务代码好用的类型</b>，并对标签类配置做缓存。
  * <p>
- * <b>为什么缓存标签集合</b>：建材白/黑名单是字符串列表，但每次垫脚判定都要问
- * 「这个方块在名单里吗」。在热路径直接解析标签会让每次垫脚都走一遍注册表与标签查询。
- * 这里首次使用时解析成集合，之后只做哈希查找；配置被改动时调 {@link #invalidateCaches()}。
+ * <b>为什么缓存标签集合</b>：建材白/黑名单、工具白/黑名单、目标白/黑名单都是字符串列表，
+ * 但热路径每次判定都要问「这个方块/物品在名单里吗」。直接解析会让每次判定都走一遍
+ * 注册表与标签查询。这里首次使用时解析成集合，之后只做哈希查找；
+ * 配置或标签被改动时调 {@link #invalidateCaches()}。
+ * <p>
+ * 1.1.0 起工具与目标名单改用<b>不可变快照 + volatile 双检</b>（见 {@link ToolRules}）：
+ * {@code isTarget} 在扫描时每方块都会调用，{@code synchronized} 方法即使无竞争
+ * 也要付监视器开销，而一次 volatile 读几乎免费。
  * <p>
  * 时间单位：tick（1 秒 = 20 tick）。
  */
@@ -28,6 +30,41 @@ public final class MiningConfig {
 
     private static Set<Block> scaffoldWhitelist;
     private static Set<Block> scaffoldBlacklist;
+
+    /**
+     * 工具名单快照（1.1.0）。
+     * <p>
+     * <b>为什么用 record + volatile 而不是"几个字段 + synchronized getter"</b>：
+     * {@code isTool} 在扫描热路径上会被频繁调用，{@code synchronized} 方法即使没有竞争
+     * 也要付一次监视器进入/退出的代价；这里用"不可变快照 + 一次 volatile 读"，
+     * 热路径开销只有字段访问，重建时才加锁。
+     * <p>
+     * <b>为什么是 public</b>：{@code MiningValidator} 的判定方法都接受一个显式规则快照
+     * （而不是自己再去读配置）。这样 GameTest 可以直接构造规则去测每种组合，
+     * 完全不必改写全局 {@code ForgeConfigSpec} —— GameTest 是并行跑的，
+     * 改全局配置会和其他用例互相干扰。
+     */
+    public record ToolRules(Set<Item> whitelist, Set<Item> blacklist,
+                            boolean whitelistConfigured, boolean requireCorrect,
+                            boolean acceptAnyPickaxe) {
+    }
+
+    /** 目标名单快照（1.1.0）。原因同 {@link ToolRules}。 */
+    public record TargetRules(Set<Block> whitelist, Set<Block> blacklist,
+                              MiningConfigSpec.TargetMode mode, boolean offhandTargeting) {
+    }
+
+    private static volatile ToolRules toolRulesSnapshot;
+    private static volatile TargetRules targetRulesSnapshot;
+
+    /**
+     * 配置"代数"：每次缓存失效就 +1。
+     * <p>
+     * 扫描器（{@code MiningTunnelFinder}）用它判断"玩家是否刚改过配置"——
+     * 改完必须从头重扫，否则它会继续沿着旧的游标往前走，把改动前已经扫过的近处
+     * 那一列跳过（1.1.0 实测：加了刷怪笼目标，女仆要等一整轮扫描 + 30 秒退避才回头）。
+     */
+    private static volatile int configGeneration;
 
     private MiningConfig() {
     }
@@ -190,37 +227,165 @@ public final class MiningConfig {
     /**
      * 把配置里的字符串解析成方块集合。
      * <p>
-     * 两种写法：以 {@code #} 开头按<b>标签</b>展开（{@code #minecraft:ores}），
-     * 否则按方块注册名解析（{@code minecraft:cobblestone}）。
+     * 解析规则（{@code #标签} / {@code ns:*} / 注册名）统一在
+     * {@link ConfigIdList} 里，这里只负责喂数据。
      */
     private static Set<Block> resolveBlocks(List<? extends Object> entries) {
-        Set<Block> result = new HashSet<>();
-        for (Object raw : entries) {
-            if (!(raw instanceof String entry) || entry.isEmpty()) {
-                continue;
-            }
-            boolean isTag = entry.charAt(0) == '#';
-            ResourceLocation id = ResourceLocation.tryParse(isTag ? entry.substring(1) : entry);
-            if (id == null) {
-                continue;
-            }
-            if (isTag) {
-                TagKey<Block> tag = TagKey.create(Registries.BLOCK, id);
-                ForgeRegistries.BLOCKS.tags().getTag(tag).forEach(result::add);
-                continue;
-            }
-            if (!ForgeRegistries.BLOCKS.containsKey(id)) {
-                continue;
-            }
-            result.add(ForgeRegistries.BLOCKS.getValue(id));
-        }
-        return result;
+        return ConfigIdList.resolve(ForgeRegistries.BLOCKS, entries);
     }
 
-    /** 配置在游戏内被改动后调用，下一次访问时重新解析标签。 */
+    // ==================== 工具（1.1.0，MM-1102） ====================
+
+    /**
+     * 当前工具规则快照。<b>生产代码与 {@code MiningValidator} 都从这里取规则</b>，
+     * 再传进判定方法，避免判定方法内部反复读配置。
+     */
+    public static ToolRules currentToolRules() {
+        ToolRules rules = toolRulesSnapshot;
+        return rules != null ? rules : buildToolRules();
+    }
+
+    /**
+     * 白名单是否被显式写过内容。
+     * <p>
+     * 判据是<b>原始配置条目非空</b>而不是"解析结果非空"：如果玩家写了 5 个
+     * 拼错的 id，解析结果是空集，但意图明显是"只允许这几个"。这时应当表现为
+     * 女仆找不到可用工具（可见的故障），而不是悄悄退回"允许所有镐子"。
+     */
+    public static boolean toolWhitelistConfigured() {
+        return currentToolRules().whitelistConfigured();
+    }
+
+    /** 是否要求工具"能正确采掘目标方块"（含挖掘等级）。 */
+    public static boolean requireCorrectTool() {
+        return currentToolRules().requireCorrect();
+    }
+
+    /** 解析后的工具白名单（只读，诊断与测试用）。 */
+    public static Set<Item> toolWhitelist() {
+        return currentToolRules().whitelist();
+    }
+
+    /** 解析后的工具黑名单（只读，诊断与测试用）。 */
+    public static Set<Item> toolBlacklist() {
+        return currentToolRules().blacklist();
+    }
+
+    private static synchronized ToolRules buildToolRules() {
+        if (toolRulesSnapshot != null) {
+            return toolRulesSnapshot; // 双检：另一个线程可能已经建好了
+        }
+        List<? extends Object> rawWhitelist =
+                safe(() -> MiningConfigSpec.TOOL_WHITELIST.get(), Defaults.TOOL_WHITELIST);
+        ToolRules built = new ToolRules(
+                ConfigIdList.resolve(ForgeRegistries.ITEMS, rawWhitelist),
+                ConfigIdList.resolve(ForgeRegistries.ITEMS,
+                        safe(() -> MiningConfigSpec.TOOL_BLACKLIST.get(), Defaults.TOOL_BLACKLIST)),
+                hasAnyEntry(rawWhitelist),
+                safe(() -> MiningConfigSpec.REQUIRE_CORRECT_TOOL.get(), Defaults.REQUIRE_CORRECT_TOOL),
+                listsPickaxeTag(rawWhitelist));
+        toolRulesSnapshot = built;
+        return built;
+    }
+
+    // ==================== 目标（1.1.0，MM-1101） ====================
+
+    /** 目标范围模式。{@code ORES} 即 1.0.x 的行为。 */
+    /**
+     * 当前目标规则快照。语义同 {@link #currentToolRules()}：
+     * 生产代码取一次快照，判定方法接受它作为参数。
+     */
+    public static TargetRules currentTargetRules() {
+        TargetRules rules = targetRulesSnapshot;
+        return rules != null ? rules : buildTargetRules();
+    }
+
+    public static MiningConfigSpec.TargetMode targetMode() {
+        return currentTargetRules().mode();
+    }
+
+    public static boolean isTargetWhitelisted(Block block) {
+        return currentTargetRules().whitelist().contains(block);
+    }
+
+    public static boolean isTargetBlacklisted(Block block) {
+        return currentTargetRules().blacklist().contains(block);
+    }
+
+    /** 解析后的目标白名单（只读，诊断与测试用）。 */
+    public static Set<Block> targetWhitelist() {
+        return currentTargetRules().whitelist();
+    }
+
+    /** 解析后的目标黑名单（只读，诊断与测试用）。 */
+    public static Set<Block> targetBlacklist() {
+        return currentTargetRules().blacklist();
+    }
+
+    /** 副手是否参与目标过滤（1.1.0 起副手也能指定非矿石方块）。 */
+    public static boolean offhandTargeting() {
+        return currentTargetRules().offhandTargeting();
+    }
+
+    private static synchronized TargetRules buildTargetRules() {
+        if (targetRulesSnapshot != null) {
+            return targetRulesSnapshot;
+        }
+        TargetRules built = new TargetRules(
+                resolveBlocks(safe(() -> MiningConfigSpec.TARGET_WHITELIST.get(), Defaults.TARGET_WHITELIST)),
+                resolveBlocks(safe(() -> MiningConfigSpec.TARGET_BLACKLIST.get(), Defaults.TARGET_BLACKLIST)),
+                safe(() -> MiningConfigSpec.TARGET_MODE.get(), Defaults.TARGET_MODE),
+                safe(() -> MiningConfigSpec.OFFHAND_TARGETING.get(), Defaults.OFFHAND_TARGETING));
+        targetRulesSnapshot = built;
+        return built;
+    }
+
+    /**
+     * 白名单里是否显式列了"镐"类标签。
+     * <p>
+     * 默认白名单就是 {@code #minecraft:pickaxes} 等标签。只要它还留在列表里，
+     * 就继续启用内置的"任何镐"识别（{@code ToolActions} / "能挖石头"兜底），
+     * 这样没打标签的模组镐不会被漏掉；玩家把镐标签删干净时，才严格只认列表内的物品。
+     */
+    private static boolean listsPickaxeTag(List<? extends Object> entries) {
+        for (Object raw : entries) {
+            if (raw instanceof String text) {
+                String entry = text.trim().toLowerCase(java.util.Locale.ROOT);
+                if (entry.startsWith("#") && entry.contains("pickaxe")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 列表里是否有至少一个非空字符串条目。 */
+    private static boolean hasAnyEntry(List<? extends Object> entries) {
+        for (Object raw : entries) {
+            if (raw instanceof String text && !text.trim().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 配置在游戏内被改动后调用，下一次访问时重新解析标签。
+     * <p>
+     * 1.1.0 起工具/目标名单也走同一套缓存，所以这里必须一并清掉——
+     * 否则玩家在服务器上改了白名单，得重启才生效。
+     */
     public static synchronized void invalidateCaches() {
         scaffoldWhitelist = null;
         scaffoldBlacklist = null;
+        toolRulesSnapshot = null;
+        targetRulesSnapshot = null;
+        configGeneration++;
+    }
+
+    /** 当前配置代数；扫描器据此决定是否重头开始。 */
+    public static int configGeneration() {
+        return configGeneration;
     }
 
     // ==================== 安全 ====================
@@ -251,9 +416,6 @@ public final class MiningConfig {
         return safe(() -> MiningConfigSpec.LOG_LEVEL.get(), Defaults.LOG_LEVEL);
     }
 
-    public static boolean showActionSummary() {
-        return safe(() -> MiningConfigSpec.SHOW_ACTION_SUMMARY.get(), Defaults.SHOW_ACTION_SUMMARY);
-    }
 
     // ==================== 兼容 ====================
 
