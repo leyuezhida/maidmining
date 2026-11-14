@@ -3,3 +3,7 @@
 # are changed when only line endings change.
 src/generated/**/.cache/cache text eol=lf
 src/generated/**/*.json text eol=lf
+
+# 让脚本保持 LF：Windows 上 checkout 成 CRLF 会让 ./gradlew 在 WSL/macOS 上直接报错
+gradlew text eol=lf
+*.sh text eol=lf
